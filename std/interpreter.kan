@@ -1,0 +1,11 @@
+// By importing this module, kan code can intepret other
+// kan code using the 'interpret' function.  A program
+// compiled with this module would essientially be including
+// the kan interpreter into their program.
+
+/*
+(set interpret function(void {} {
+    // ...
+}))
+*/
+setBultinFunction(interpret)

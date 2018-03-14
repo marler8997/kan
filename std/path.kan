@@ -1,0 +1,8 @@
+set(join function(auto {oneOrMore(string)}
+{
+    assert(0 "not implemented")
+})
+set(dirOf function(auto {string}
+{
+    assert(0 "not implemented")
+}))

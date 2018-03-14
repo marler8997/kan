@@ -1,0 +1,7 @@
+import(io)
+
+set(a 1)
+
+if(equals(a 1) {
+    io.print("a is 1")
+})

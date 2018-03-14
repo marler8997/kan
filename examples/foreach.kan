@@ -1,0 +1,10 @@
+import(io)
+
+foreach(str {"a" "b" "c" "d"} {
+    io.print("foreach str: " str)
+})
+
+set(strings {"a" "b" "c" "d"})
+foreach(str strings {
+    io.print("foreach str: " str)
+})

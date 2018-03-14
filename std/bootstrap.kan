@@ -1,0 +1,9 @@
+//
+// The following are the builtin function definitions for the current implementation.
+//
+set(symbol syntaxFunction(...))
+set(flag syntaxFunction(...))
+
+set(set analyzeSyntaxFunction(...))
+set(import analyzeSyntaxFunction(...))
+set(function analyzeSemanticFunction(...))

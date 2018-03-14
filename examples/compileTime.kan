@@ -1,0 +1,11 @@
+
+
+// TODO: test to make sure that compile-time stuff is done at compile-time
+set(x 42)
+compileTimeAssert(equals(x 42))
+
+// Verify that you can call a function at compile-time
+set(squareWrapper function(void {x} {
+    return(square(x))
+}))
+compileTimeAssert(equals(squareWrapper(x) 1764))

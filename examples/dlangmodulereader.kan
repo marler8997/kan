@@ -1,0 +1,176 @@
+// Example ported from dlangmodulereader
+import(io)
+
+set(LibFileFormat enum(coff omf elf))
+
+//io.print(LibFileFormat.coff)
+//io.print(LibFileFormat.omf)
+//io.print(LibFileFormat.elf)
+
+// show nice error message
+//io.print(LibFileFormat.what)
+
+set(usage function(void {}
+{
+    io.print("Usage:")
+    io.print("  dmods list <format> <files>...")
+    io.print("  dmods patch <format> <files>...")
+    set(prefix "")
+    //foreach(format LibFileFormat.values tuple(
+    //    io.print(flag(noNewline) prefix)
+    //    io.print format.name
+    //    set(prefix ", ")
+    //))
+    io.print()
+}))
+
+
+usage()
+
+
+
+//function peelLibFileFormat LibFileFormat (ref array(array(char)) args)
+//{
+//    if equals(args 0)
+//    {
+//        print("Error: not enough command line arguments, object file format required")
+//        throw void
+//    }
+//    fileFormatString = args.index(0)
+//    args = args.slice(1)
+//    format = LibFileFormat.parse(fileFormatString)
+//    if format.isNull()
+//    {
+//        print("Error: invalid file format " fileFormatString)
+//        throw void
+//    }
+//    return format
+//}
+//
+//function main int (array(array(char)) args)
+//{
+//    args = args.slice(1)
+//    if equals(args.length 0)
+//    {
+//        usage()
+//        return 1
+//    }
+//    command = args.index(0)
+//    args = args.slice(1)
+//    if equals(command "list")
+//    {
+//        libFormat = peelLibFileFormat(ref args)
+//        if equals(args.length 0)
+//        {
+//            print("Error: no files were given")
+//            throw void
+//        }
+//
+//        foreach filename in args
+//        {
+//            if not(exists(filename))
+//            {
+//                print("Error: file '"filename"' does not exist")
+//                throw void
+//            }
+//        }
+//        buffer = DynamicBuffer()
+//        foreach filename in args
+//        {
+//            printer = ModulePrinter()
+//            getReader(libFormat)(filename, printer, ref buffer)
+//            print("Module Count: "printer.moduleCount)
+//        }
+//    }
+//    else if equals(command "patch")
+//    {
+//        ....
+//    }
+//    else
+//    {
+//        print("Error: unknown command '"command"'")
+//        return 1
+//    }
+//
+//    return 0
+//}
+//
+//```
+//
+//For now, the basic and most common "constructs" will have their own special syntax.
+//
+//assign construct
+//```
+//<expression> = <expression>
+//```
+//
+//call construct
+//```
+//<function-name> (<options> <expression>... , <expression>... )
+//
+//print("hello")
+//print(:noline "hello")
+//```
+//
+//set/array construct
+//```
+//{<value-expression> <value-expression>...}
+//```
+//
+//define function construct
+//```
+//function <name> <return-type> (<parameter>...)
+//{
+//    ...
+//}
+//```
+//
+//if/elseif/else construct:
+//```
+//if <condition-expression>
+//{
+//    ...
+//}
+//else if <condition-expression>
+//{
+//    ...
+//}
+//else
+//{
+//    ...
+//}
+//```
+//
+//return/throw construct
+//```
+//return <expression>
+//throw <expression>
+//```
+//
+//enum construct
+//```
+//enum <name> {<symbol> <symbol> ...}
+//```
+//the enum values have properties such as
+//```
+//enum Colors {red green blue}
+//Colors.red.string // returns a string of the value
+//Colors.parse(stringValue)
+//Colors.parse(:caseSensitive stringValue)
+//```
+//
+//the "." operator
+//```
+//<expression>.<call>
+//OR
+//<expression>.<symbol>
+//```
+//
+//the foreach construct
+//```
+//foreach <symbol> in <expression>
+//{
+//    ...
+//}
+//```
+//

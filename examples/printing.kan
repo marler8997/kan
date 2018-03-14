@@ -1,0 +1,6 @@
+import(io)
+io.print(flag(noNewline) "Hello")
+io.print(", World!")
+
+set(a "access string through symbol")
+io.print(a)

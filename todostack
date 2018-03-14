@@ -1,0 +1,16 @@
+get examples/jump.kan to work
+
+analyzeValue needs a "IReadonlyScope" variant (foreach function needs this)
+
+figure out how analysis works.
+code will be marked as "used" or "unused".
+Examples of code that is used is any "code" that is in the top-level
+of a module that was given on the command line.  Then any dependent functions
+for that code will also be marked as used.
+When analyzing function definitions, if it is unused then only the minimum analysis will
+be performed.  However, once it is "used" it will be fully analyzed along with any
+dependencies it has.
+
+The new "resolveFunction" function should take an argument that indicates whether or not the resolved function will be "used".
+If the function was already loaded as "unused", then at this time it can "finish" it's analysis as if it is used which means
+that it will resolve it's own function dependencies.

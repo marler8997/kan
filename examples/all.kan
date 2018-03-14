@@ -1,0 +1,13 @@
+import(path)
+import(interpreter)
+
+set(exampleNames {
+    "helloWorld"
+    "printing"
+    "keywordsAsSymbols"
+    "functions"
+})
+foreach(exampleName exampleNames {
+    interpreter.interpret(path.join(path.dirOf(sourceFile) "helloWorld.kan"))
+})
+//interpreter.interpret(path.join(path.dirOf(sourceFile) "helloWorld.kan"))

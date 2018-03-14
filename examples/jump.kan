@@ -1,0 +1,29 @@
+//
+// I think the way I'm going to implement branching/looping constructs
+// is by lowering them to simple "jumps"
+//
+import(io)
+
+
+//
+// Idea 1
+//
+/*
+set(a1 0)
+// pushes a "jump point" that can be referenced/jumped to later"
+pushJumpPoint()
+io.print("a1 is " a1)
+inc(a1)
+jump(leftIsLess(a1 10) popJumpPoint())
+*/
+
+//
+// Idea 2
+//
+set(a2 0)
+jumpBlock(
+    io.print("a2 is " a2)
+    jumpLoopIf(leftIsLess(a2 10))
+)
+
+// NOTE: the previous example could be written as

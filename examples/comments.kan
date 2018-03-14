@@ -1,0 +1,12 @@
+import(io)
+/*
+This is a multi-line comment
+*/
+io.print("Testing comments!")  // This is a single-line comment
+
+/*
+
+    /*
+    */
+    Nested comments should work to!!
+*/

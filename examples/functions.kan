@@ -1,0 +1,24 @@
+import(io)
+
+set(printHelloFunctions function(void {}
+{
+    io.print("Hello Functions!")
+}))
+
+// Call the function
+printHelloFunctions()
+
+//
+// Use the 'call' function to call functions
+//
+
+// Call the function using the 'call' method
+call(printHelloFunctions)
+
+call(io.print "Print using call")
+
+// call a function literal
+call(function(void {}
+{
+    io.print("Hello Function Literals using call!")
+}))

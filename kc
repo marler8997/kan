@@ -1,0 +1,3 @@
+#!/bin/bash
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd)"
+rdmd -g -debug -I${DIR}/../mored ${DIR}/kcmain.d -I=${DIR}/std $@
