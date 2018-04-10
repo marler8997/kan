@@ -16,11 +16,13 @@ set(usage function(void {}
     io.print("  dmods list <format> <files>...")
     io.print("  dmods patch <format> <files>...")
     set(prefix "")
-    //foreach(format LibFileFormat.values tuple(
-    //    io.print(flag(noNewline) prefix)
-    //    io.print format.name
-    //    set(prefix ", ")
-    //))
+    /*
+    foreach(format LibFileFormat.values tuple(
+        io.print(flag(noNewline) prefix)
+        io.print format.name
+        set(prefix ", ")
+    ))
+    */
     io.print()
 }))
 

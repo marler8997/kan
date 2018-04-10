@@ -6,13 +6,16 @@ import std.format : format;
 import common : from, uarray;
 
 import syntax : SyntaxNodeType, SyntaxNode, CallSyntaxNode;
-import semantics : IScope, SemanticNodeType, SemanticNode, RuntimeCall, BuiltinRuntimeFunction, UserDefinedFunction, TypedValue;
+import semantics : IScope, SemanticNodeType, SemanticNode, RuntimeCall,
+                   BuiltinRuntimeFunction, UserDefinedFunction, TypedValue,
+                   BlockFlags;
 
 struct CodeBlockPosition
 {
     static CodeBlockPosition nullValue() { return CodeBlockPosition(uarray!SemanticNode.init); }
     uarray!SemanticNode nodes;
     uint nextStatementIndex = void;
+    BlockFlags flags;
     pragma(inline) bool isNull() { return nodes.ptr == null; }
 }
 
@@ -73,7 +76,7 @@ struct Interpreter
             import types : VoidType;
             if (node.typedValue.asTypedValue.type !is VoidType.instance)
             {
-                import types; from!"std.stdio".writefln("[DEBUG] typed value %s", node.typedValue.asTypedValue.type.formatType);
+                import types; from!"std.stdio".writefln("[DEBUG] typed value %s", node.typedValue.asTypedValue.type.formatName);
                 assert(0, "not implemented: interpreter handle semantc node typed value");
             }
             break;
@@ -81,9 +84,6 @@ struct Interpreter
             assert(0, "not implemented");
         case SemanticNodeType.symbol:
             assert(0, "not implemented");
-        case SemanticNodeType.syntaxCall:
-            // do nothing
-            break;
         case SemanticNodeType.semanticCall:
             handle(node.semanticCall.returnValue);
             break;
@@ -103,6 +103,14 @@ struct Interpreter
                     //interpretRuntimeCall(&node.runtimeCall, asUserDefined);
                 }
             }
+            break;
+        case SemanticNodeType.statementBlock:
+            blockStack.put(CodeBlockPosition(
+                node.statementBlock.statements, 0, node.statementBlock.flags
+            ));
+            break;
+        case SemanticNodeType.jump:
+            assert(0, "jump not implemented");
             break;
         }
     }

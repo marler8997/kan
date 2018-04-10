@@ -1,3 +1,5 @@
+#!/usr/bin/env rund
+//!includePath ../mored
 import std.algorithm : canFind;
 import std.typecons : Flag, Yes, No;
 import std.array : Appender;
@@ -81,7 +83,7 @@ int tryMain(string[] args)
     }
     auto action = Action.run;
     {
-        auto first = args[0];
+        const first = args[0];
         if (first == "compile")
         {
             action = Action.compile;

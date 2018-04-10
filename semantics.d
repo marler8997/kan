@@ -3,6 +3,7 @@ module semantics;
 import std.typecons : Flag, Yes, No, scoped;
 import std.bitmanip : bitfields;
 import std.bigint : BigInt;
+import std.algorithm : min;
 import std.string : indexOf;
 import std.format : formattedWrite;
 
@@ -15,8 +16,9 @@ import common : isNull, uarray, toUarray, from, singleton, quit;
 static import global;
 import syntax : SyntaxNodeType, SyntaxNode, KeywordType, StringSyntaxNode, TupleSyntaxNode, CallSyntaxNode;
 import types;// : Type, VoidType, NumberType, StringType, ModuleType;
+import symtab : SymbolTable;
 import mod : Module;
-import builtin : tryFindSyntaxFunction, tryFindSemanticFunction;
+import builtin : tryFindSemanticFunction;
 static import interpreter;
 
 enum SemanticNodeType : ubyte
@@ -26,9 +28,10 @@ enum SemanticNodeType : ubyte
     tuple,
     // Means the node represents a symbol
     symbol,
-    syntaxCall,
     semanticCall,
     runtimeCall,
+    statementBlock,
+    jump,
 }
 
 struct TypedValueNode
@@ -51,12 +54,6 @@ struct SymbolNode
     Rebindable!TypedValue resolved;
     @property string symbolString() const { return asTypedValue.value.string_; }
 }
-struct SyntaxCall
-{
-    const(CallSyntaxNode)* syntaxNode;
-    Rebindable!TypedValue asTypedValue;
-    SemanticNode* returnValue;
-}
 struct SemanticCall
 {
     const(CallSyntaxNode)* syntaxNode;
@@ -64,8 +61,26 @@ struct SemanticCall
     SemanticFunction function_;
     uarray!SemanticNode arguments;
     uint analyzeArgumentsIndex;
+    void* staticData;
     SemanticNode* returnValue;
 }
+auto getStaticDataStruct(T)(SemanticCall* call) if (is(T == struct))
+{
+    static struct Wrapper
+    {
+        bool newlyAllocated;
+        T* dataPtr;
+        alias dataPtr this;
+    }
+    if (call.staticData is null)
+    {
+        auto newT = new T();
+        call.staticData = newT;
+        return Wrapper(true, newT);
+    }
+    return Wrapper(false, cast(T*) call.staticData);
+}
+
 enum RuntimeCallAnalyzeState : ubyte
 {
     analyzeArguments,
@@ -100,6 +115,33 @@ struct RuntimeCall
     }
 }
 
+enum BlockFlags : ubyte
+{
+    isJumpBlock,
+}
+struct StatementBlock
+{
+    const(SyntaxNode)* syntaxNode;
+    Rebindable!TypedValue asTypedValue;
+    IScope scope_;
+    uarray!SemanticNode statements;
+    uint analyzeStatementsIndex;
+    BlockFlags flags;
+}
+
+enum JumpType : ubyte
+{
+    loopCurrentBlock,
+    breakCurrentBlock,
+}
+struct JumpNode
+{
+    const(SyntaxNode)* syntaxNode;
+    Rebindable!TypedValue asTypedValue;
+    SemanticNode* condition;
+    JumpType jumpType;
+}
+
 struct SemanticNode
 {
     static SemanticNode nullValue() { return SemanticNode(null); }
@@ -131,24 +173,29 @@ struct SemanticNode
         TypedValueNode typedValue = void;
         TupleNode tuple = void;
         SymbolNode symbol = void;
-        SyntaxCall syntaxCall = void;
         SemanticCall semanticCall = void;
         RuntimeCall runtimeCall = void;
+        StatementBlock statementBlock = void;
+        JumpNode jump = void;
     }
     SemanticNodeType nodeType;
     static assert(syntaxNode.offsetof == TypedValueNode.syntaxNode.offsetof);
     static assert(syntaxNode.offsetof == TupleNode.syntaxNode.offsetof);
     static assert(syntaxNode.offsetof == SymbolNode.syntaxNode.offsetof);
-    static assert(syntaxNode.offsetof == SyntaxCall.syntaxNode.offsetof);
     static assert(syntaxNode.offsetof == SemanticCall.syntaxNode.offsetof);
     static assert(syntaxNode.offsetof == RuntimeCall.syntaxNode.offsetof);
+    static assert(syntaxNode.offsetof == StatementBlock.syntaxNode.offsetof);
+    static assert(syntaxNode.offsetof == JumpNode.syntaxNode.offsetof);
 
     static assert(asTypedValue.offsetof == TypedValueNode.asTypedValue.offsetof);
     static assert(asTypedValue.offsetof == TupleNode.asTypedValue.offsetof);
     static assert(asTypedValue.offsetof == SymbolNode.asTypedValue.offsetof);
-    static assert(asTypedValue.offsetof == SyntaxCall.asTypedValue.offsetof);
     static assert(asTypedValue.offsetof == SemanticCall.asTypedValue.offsetof);
     static assert(asTypedValue.offsetof == RuntimeCall.asTypedValue.offsetof);
+    static assert(asTypedValue.offsetof == StatementBlock.asTypedValue.offsetof);
+    static assert(asTypedValue.offsetof == JumpNode.asTypedValue.offsetof);
+
+    void nullify() { syntaxNode = null; }
 
     pragma(inline) final void initTypedValue(const(SyntaxNode)* syntaxNode, const(TypedValue) typedValueToSet)
         in { assert(isNull); }
@@ -175,18 +222,32 @@ struct SemanticNode
             rebindable(TypedValue.nullValue));
         this.nodeType = SemanticNodeType.symbol;
     }
-    void initializeAsRuntimeCall(const(CallSyntaxNode)* syntaxCall)
+    final void initializeAsRuntimeCall(const(CallSyntaxNode)* syntaxCall)
         in { assert(isNull); }
         out { assert(!isNull); } do
     {
-        auto arguments = new SemanticNode[syntaxCall.arguments.length].toUarray;
-        foreach (i, ref argumentSyntaxNode; syntaxCall.arguments)
-        {
-            arguments[i].initialize(&argumentSyntaxNode);
-        }
         this.runtimeCall = RuntimeCall(syntaxCall,
-            rebindable(RuntimeCallType.instance.createTypedValue(&this.runtimeCall)), arguments);
+            rebindable(RuntimeCallType.instance.createTypedValue(&this.runtimeCall)),
+            createSemanticNodes(syntaxCall.arguments));
         this.nodeType = SemanticNodeType.runtimeCall;
+    }
+    final void initializeStatementBlock(const(SyntaxNode)* syntaxNode, BlockFlags flags, IScope scope_,
+        uarray!SemanticNode statements)
+        in { assert(isNull); }
+        out { assert(!isNull); } do
+    {
+        this.statementBlock = StatementBlock(syntaxNode,
+            rebindable(StatementBlockType.instance.createTypedValue(&this.statementBlock)),
+            scope_, statements, 0, flags);
+        this.nodeType = SemanticNodeType.statementBlock;
+    }
+    final void initializeJumpNode(const(SyntaxNode)* syntaxNode, JumpType jumpType, SemanticNode* condition)
+        in { assert(isNull); }
+        out { assert(!isNull); } do
+    {
+        this.jump = JumpNode(syntaxNode,
+            rebindable(TypedValue.void_), condition, jumpType);
+        this.nodeType = SemanticNodeType.jump;
     }
     final void initialize(const(SyntaxNode)* syntaxNode)
         in { assert(isNull); }
@@ -216,37 +277,30 @@ struct SemanticNode
             return;
         case SyntaxNodeType.tuple:
             {
-                auto arguments = new SemanticNode[syntaxNode.call.arguments.length].toUarray;
-                foreach (i, ref argumentSyntaxNode; syntaxNode.call.arguments)
-                {
-                    arguments[i].initialize(&argumentSyntaxNode);
-                }
                 this.tuple = TupleNode(syntaxNode,
                     rebindable(TupleLiteralType.instance.createTypedValue(&this.tuple)),
-                    arguments, 0);
+                    createSemanticNodes(syntaxNode.tuple.nodes), 0);
                 this.nodeType = SemanticNodeType.tuple;
             }
             return;
         case SyntaxNodeType.call:
             {
-                auto syntaxFunction = tryFindSyntaxFunction(&syntaxNode.call);
-                if (syntaxFunction !is null)
-                {
-                    this.syntaxCall = SyntaxCall(&syntaxNode.call,
-                        rebindable(SyntaxCallType.instance.createTypedValue(&this.syntaxCall)),
-                        syntaxFunction(&syntaxNode.call));
-                    this.nodeType = SemanticNodeType.syntaxCall;
-                    return;
-                }
-            }
-            {
                 auto function_ = tryFindSemanticFunction(&syntaxNode.call);
                 if (function_ !is null)
                 {
-                    auto arguments = new SemanticNode[syntaxNode.call.arguments.length].toUarray;
-                    foreach (i, ref argumentSyntaxNode; syntaxNode.call.arguments)
+                    auto nodeCount = function_.semanticNodeBufferCountFor(syntaxNode.call.arguments.length);
+                    auto arguments = new SemanticNode[nodeCount].toUarray;
+                    auto initializedCount = 0;
+                    foreach (arg; function_.semanticNodeRange(syntaxNode.call.arguments.length))
                     {
-                        arguments[i].initialize(&argumentSyntaxNode);
+                        arguments[arg.semanticNodeIndex].initialize(&syntaxNode.call.arguments[arg.syntaxNodeIndex]);
+                        initializedCount++;
+                    }
+                    assert(initializedCount <= nodeCount);
+                    while(initializedCount < nodeCount)
+                    {
+                        // TODO: initialize to a void placeholder value
+                        assert(0, "not implemented");
                     }
                     this.semanticCall = SemanticCall(&syntaxNode.call,
                         rebindable(SemanticCallType.instance.createTypedValue(&this.semanticCall)),
@@ -262,35 +316,39 @@ struct SemanticNode
     }
 
     // NOTE: it is assumed this node has already been analyzed!
-    final inout(TypedValue) getAnalyzedTypedValue(Flag!"resolveSymbol" resolveSymbol) inout
+    final auto getAnalyzedTypedValue(Flag!"resolveSymbols" resolveSymbols)
     {
         final switch(nodeType)
         {
         case SemanticNodeType.typedValue:
-            return cast(inout(TypedValue))asTypedValue;
+            return asTypedValue;
         case SemanticNodeType.tuple:
             assert(tuple.analyzeElementsIndex == tuple.elements.length, "code bug");
-            return cast(inout(TypedValue))asTypedValue;
+            return asTypedValue;
         case SemanticNodeType.symbol:
-            if (!resolveSymbol)
-                return cast(inout(TypedValue))asTypedValue;
+            if (!resolveSymbols)
+                return asTypedValue;
             if (symbol.resolved.isNull)
             {
                 from!"std.stdio".writefln("symbol %s resolved is null", this.symbol.syntaxNode.source);
                 assert(0, "not implemented");
             }
-            return cast(inout(TypedValue))symbol.resolved;
-        case SemanticNodeType.syntaxCall:
-            return syntaxCall.returnValue.getAnalyzedTypedValue(resolveSymbol);
+            return symbol.resolved;
         case SemanticNodeType.semanticCall:
-            if (semanticCall.returnValue.isNull)
+            if (semanticCall.returnValue is null)
             {
                 assert(0, "code bug: getAnalyzedTypedValue should not be called on a node that is not analyzed");
             }
-            return semanticCall.returnValue.getAnalyzedTypedValue(resolveSymbol);
-            //return cast(inout(TypedValue))semanticCall.returnValue;
+            return semanticCall.returnValue.getAnalyzedTypedValue(resolveSymbols);
+            //return semanticCall.returnValue;
         case SemanticNodeType.runtimeCall:
-            return cast(inout(TypedValue))asTypedValue;
+            // TODO: need to return the return value as a typed value, not the call itself
+            assert(0, "not implemented");
+            return asTypedValue;
+        case SemanticNodeType.statementBlock:
+            assert(0, "getAnalyzedTypedValue statementBlock not implemented");
+        case SemanticNodeType.jump:
+            assert(0, "getAnalyzedTypedValue jump not implemented");
         }
     }
 
@@ -303,9 +361,19 @@ struct SemanticNode
 
 }
 
-string tryEvaluateToSymbol(inout(SemanticNode)* node)
+uarray!SemanticNode createSemanticNodes(const uarray!SyntaxNode syntaxNodes)
 {
-    return node.getAnalyzedTypedValue(No.resolveSymbol).tryGetValueAs!SymbolType(null);
+    auto semanticNodes = new SemanticNode[syntaxNodes.length].toUarray;
+    foreach (i; 0 .. syntaxNodes.length)
+    {
+        semanticNodes[i].initialize(&syntaxNodes[i]);
+    }
+    return semanticNodes;
+}
+
+string tryEvaluateToSymbol(SemanticNode* node)
+{
+    return node.getAnalyzedTypedValue(No.resolveSymbols).tryGetValueAs!SymbolType(null);
 }
 
 auto peelQualifier(string* symbol)
@@ -403,12 +471,41 @@ ResolveResult tryGetQualified(IDotQualifiable qualifiable, string symbol)
     }
 }
 
-interface IReadOnlyScope : IDotQualifiable
+interface IReadonlyScope : IDotQualifiable
 {
-    IReadOnlyScope getParent();
-    Module getModule();
+    @property inout(IReadonlyScope) getParent() inout;
+    @property inout(Module) asModule() inout;
+    @property inout(IScope) asWriteable() inout;
+    @property inout(JumpBlock) asJumpBlock() inout;
 }
-interface IScope : IReadOnlyScope
+inout(Module) getModule(inout(IReadonlyScope) scope_)
+{
+    auto next = rebindable(scope_);
+    while(true)
+    {
+        auto module_ = next.asModule;
+        if (module_ !is null)
+            return cast(inout(Module))module_;
+        next = next.getParent;
+        if (next is null)
+            assert(0, "this scope is not inside a module");
+    }
+}
+inout(JumpBlock) tryGetJumpBlock(inout(IReadonlyScope) scope_)
+{
+    auto next = rebindable(scope_);
+    while(true)
+    {
+        auto jumpBlock = next.asJumpBlock;
+        if (jumpBlock !is null)
+            return cast(inout(JumpBlock))jumpBlock;
+        next = next.getParent;
+        if (next is null)
+            return null;
+    }
+}
+
+interface IScope : IReadonlyScope
 {
     void add(const(string) symbol, const(TypedValue) value);
 }
@@ -589,8 +686,103 @@ struct RuntimeFunctionInterface
     }
 }
 
+struct NumberedSemanticArgType
+{
+    ushort count;
+    SemanticArgType type;
+    this(SemanticArgType type, ushort count) inout
+    in { assert(count > 0); } do
+    {
+        this.type = type;
+        this.count = count;
+    }
+}
+enum SemanticArgType : ubyte
+{
+    syntaxNode,
+    semiAnalyzedSemanticNode,
+    fullyAnalyzedSemanticNode,
+}
+pragma(inline) bool needsSemanticNode(const SemanticArgType type)
+{
+    return type != SemanticArgType.syntaxNode;
+}
+
 class SemanticFunction
 {
+    SemanticArgType defaultArgType;
+    const(NumberedSemanticArgType)[] firstArgTypes;
+    // Total number of arguments in firstArgTypes
+    private size_t firstArgTypesCount;
+    // Saves the number of nodes needed from firstArgTypes
+    private size_t firstArgsThatNeedSemanticNodesCount;
+    this(SemanticArgType defaultArgType, immutable(NumberedSemanticArgType)[] firstArgTypes) immutable
+    {
+        this.defaultArgType = defaultArgType;
+        this.firstArgTypes = firstArgTypes;
+        size_t countArgs = 0;
+        size_t countSemanticNodes = 0;
+        if (firstArgTypes !is null)
+        {
+            foreach (argType; firstArgTypes)
+            {
+                countArgs += argType.count;
+                if (argType.type.needsSemanticNode)
+                    countSemanticNodes += argType.count;
+            }
+        }
+        this.firstArgTypesCount = countArgs;
+        this.firstArgsThatNeedSemanticNodesCount = countSemanticNodes;
+    }
+
+    // Returns the number of nodes that need to be allocated for the call
+    size_t semanticNodeBufferCountFor(size_t syntaxNodeCount) const
+    {
+        if (syntaxNodeCount <= firstArgTypesCount)
+            return firstArgsThatNeedSemanticNodesCount; // This is always the minimum
+
+        if (defaultArgType.needsSemanticNode)
+        {
+            return syntaxNodeCount - (firstArgTypesCount - firstArgsThatNeedSemanticNodesCount);
+        }
+        return firstArgsThatNeedSemanticNodesCount;
+    }
+    // Returns the number of nodes that need to be analyzed
+    size_t semanticNodeAnalyzeCountFor(size_t syntaxNodeCount) const
+    {
+        if (syntaxNodeCount >= firstArgTypesCount)
+        {
+            if (defaultArgType.needsSemanticNode)
+            {
+                return syntaxNodeCount - (firstArgTypesCount - firstArgsThatNeedSemanticNodesCount);
+            }
+            return firstArgsThatNeedSemanticNodesCount;
+        }
+
+        // We don't have all the initial arguments, so we have to count how many
+        // semantic nodes we need
+        size_t semanticNodeCount = 0;
+        for (size_t i = 0; ; i++)
+        {
+            assert(i < firstArgTypes.length, "code bug");
+            auto nextCount = firstArgTypes[i].count;
+            if (nextCount >= syntaxNodeCount)
+            {
+                if (firstArgTypes[i].type.needsSemanticNode)
+                    semanticNodeCount += syntaxNodeCount;
+                return semanticNodeCount;
+            }
+            if (firstArgTypes[i].type.needsSemanticNode)
+                semanticNodeCount += nextCount;
+            syntaxNodeCount -= nextCount;
+        }
+    }
+    // Returns an input range of syntaxNode/semanticNode indices
+    auto semanticNodeRange(uint syntaxNodeCount) const
+    {
+        return NodeIndicesRange(this, syntaxNodeCount);
+    }
+
     /**
     Note, it is important to know during analysis if a semantic function can add symbols because
     symbol resolution cannot ascend past a scope until all symbols in that scope have been added.
@@ -598,11 +790,11 @@ class SemanticFunction
     */
     bool canAddSymbols() const
     {
-        return true; // safer to assume functions can add symbols by default
+        return false;
     }
-    abstract SemanticCallResult interpret(IScope scope_, SemanticCall* call, Flag!"used" used) const;
+    abstract SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const;
 
-    final void printErrorsForInterpret(IReadOnlyScope scope_, SemanticCall* call, Flag!"used" used) const
+    final void printErrorsForInterpret(IReadonlyScope scope_, SemanticCall* call, Flag!"used" used) const
     {
         from!"std.stdio".writefln("%sError: failed to interpret function '%s' (TODO: implement printing more details)",
             scope_.getModule.formatLocation(call.syntaxNode.source), call.syntaxNode.functionName);
@@ -642,23 +834,312 @@ class SemanticFunction
     }
 }
 
-class SemanticFunctionCannotAddSymbols : SemanticFunction
+struct NodeIndices
 {
-    override bool canAddSymbols() const { return false; }
-    override SemanticCallResult interpret(IScope scope_, SemanticCall* call, Flag!"used" used) const
-    {
-        assert(0, "code bug: semantic function is missing `mixin SemanticFunctionCannotAddSymbolsMixin;`");
-    }
+    uint syntaxNodeIndex;
+    uint semanticNodeIndex;
 }
-mixin template SemanticFunctionCannotAddSymbolsMixin()
+struct NodeIndicesRange
 {
-    final override SemanticCallResult interpret(IScope scope_, SemanticCall* call, Flag!"used" used) const
+    const(SemanticFunction) function_;
+    uint syntaxNodeCount;
+    uint firstArgTypeIndex;
+    ushort firstArgCount;
+    NodeIndices currentIndices;
+    this(const(SemanticFunction) function_, uint syntaxNodeCount)
     {
-        return interpretReadonlyScope(cast(IReadOnlyScope)scope_, call, used);
+        this.function_ = function_;
+        this.syntaxNodeCount = syntaxNodeCount;
+        toNextFirstArg();
+    }
+    private void toNextFirstArg()
+    {
+        for(;; firstArgTypeIndex++)
+        {
+            if (firstArgTypeIndex >= function_.firstArgTypes.length)
+            {
+                if (!function_.defaultArgType.needsSemanticNode)
+                {
+                    // skip the rest of the semantic nodes
+                    currentIndices.syntaxNodeIndex = syntaxNodeCount;
+                }
+                break;
+            }
+            if (function_.firstArgTypes[firstArgTypeIndex].type.needsSemanticNode)
+                break;
+
+            // skip syntax nodes
+            currentIndices.syntaxNodeIndex += function_.firstArgTypes[firstArgTypeIndex].count;
+        }
+    }
+    bool empty() const { return currentIndices.syntaxNodeIndex >= syntaxNodeCount; }
+    NodeIndices front() { return currentIndices; }
+    void popFront()
+    {
+        version(none)
+        {
+            from!"std.stdio".writefln("+ popFront semantic %s syntax %s",
+                currentIndices.semanticNodeIndex, currentIndices.syntaxNodeIndex);
+            scope(exit)
+            {
+                from!"std.stdio".writefln("- popFront semantic %s syntax %s",
+                    currentIndices.semanticNodeIndex, currentIndices.syntaxNodeIndex);
+            }
+        }
+        currentIndices.semanticNodeIndex++;
+        currentIndices.syntaxNodeIndex++;
+        for(;;)
+        {
+            if (currentIndices.syntaxNodeIndex >= syntaxNodeCount)
+                return;
+
+            if (firstArgTypeIndex >= function_.firstArgTypes.length)
+                return;
+
+            firstArgCount++;
+            if (firstArgCount < function_.firstArgTypes[firstArgTypeIndex].count)
+                return;
+            firstArgTypeIndex++;
+            toNextFirstArg();
+            firstArgCount = 0;
+        }
     }
 }
 
+unittest
+{
+    //from!"std.stdio".writefln("SEMANTICS!------------------------------");
+    //scope(exit) from!"std.stdio".writefln("SEMANTICS DONE!------------------------------");
+    static class TestSemanticFunction : SemanticFunction
+    {
+        this(SemanticArgType defaultArgType, immutable(NumberedSemanticArgType)[] firstArgTypes) immutable
+        {
+            super(defaultArgType, firstArgTypes);
+        }
+        override SemanticCallResult interpret(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+        {
+            assert(0, "code bug: semantic function is missing `mixin SemanticFunctionCannotAddSymbolsMixin;`");
+        }
+    }
+    foreach(foo; [
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, null),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 1),
+        ]),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 2),
+        ]),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 100),
+        ]),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 1),
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 1),
+        ]),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 2),
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 1),
+        ]),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 1),
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 2),
+        ]),
+        new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 100),
+            immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, 200),
+        ]),
+    ])
+    {
+        foreach (syntaxNodeCount; [0, 1, 2, 500])
+        {
+            assert(0 == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+            assert(0 == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+            auto range = foo.semanticNodeRange(syntaxNodeCount);
+            assert(range.empty);
+        }
+    }
+    {
+        auto foo = new immutable TestSemanticFunction(SemanticArgType.fullyAnalyzedSemanticNode, null);
+        foreach (syntaxNodeCount; 0 .. 5)
+        {
+            assert(syntaxNodeCount == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+            assert(syntaxNodeCount == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+            auto range = foo.semanticNodeRange(syntaxNodeCount);
+            foreach (i; 0 .. syntaxNodeCount)
+            {
+                assert(!range.empty);
+                assert(range.front.syntaxNodeIndex == i);
+                assert(range.front.semanticNodeIndex == i);
+                range.popFront();
+            }
+            assert(range.empty);
+        }
+    }
+    foreach (ushort firstArgSemanticNodeCount; 1 .. 5)
+    {
+        {
+            auto foo = new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+                immutable NumberedSemanticArgType(SemanticArgType.fullyAnalyzedSemanticNode, firstArgSemanticNodeCount),
+            ]);
+            foreach (syntaxNodeCount; 0 .. firstArgSemanticNodeCount + 1)
+            {
+                assert(firstArgSemanticNodeCount == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(syntaxNodeCount           == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                foreach (i; 0 .. syntaxNodeCount)
+                {
+                    assert(!range.empty);
+                    assert(range.front.syntaxNodeIndex == i);
+                    assert(range.front.semanticNodeIndex == i);
+                    range.popFront();
+                }
+                assert(range.empty);
+            }
+            foreach (syntaxNodeCount; [firstArgSemanticNodeCount + 1, firstArgSemanticNodeCount + 2, 500])
+            {
+                assert(firstArgSemanticNodeCount == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(firstArgSemanticNodeCount == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                foreach (i; 0 .. firstArgSemanticNodeCount)
+                {
+                    assert(!range.empty);
+                    assert(range.front.syntaxNodeIndex == i);
+                    assert(range.front.semanticNodeIndex == i);
+                    range.popFront();
+                }
+                assert(range.empty);
+            }
+        }
 
+        foreach (ushort secondArgSyntaxNodeCount; 1 .. 5)
+        {
+            auto foo = new immutable TestSemanticFunction(SemanticArgType.fullyAnalyzedSemanticNode, [
+                immutable NumberedSemanticArgType(SemanticArgType.fullyAnalyzedSemanticNode, firstArgSemanticNodeCount),
+                immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, secondArgSyntaxNodeCount),
+            ]);
+            foreach (syntaxNodeCount; 0 .. firstArgSemanticNodeCount + secondArgSyntaxNodeCount + 1)
+            {
+                auto maxSemanticNodeIndex = (syntaxNodeCount <= firstArgSemanticNodeCount) ? syntaxNodeCount : firstArgSemanticNodeCount;
+                assert(firstArgSemanticNodeCount == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(maxSemanticNodeIndex      == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                foreach (i; 0 .. maxSemanticNodeIndex)
+                {
+                    assert(!range.empty);
+                    assert(range.front.syntaxNodeIndex == i);
+                    assert(range.front.semanticNodeIndex == i);
+                    range.popFront();
+                }
+                assert(range.empty);
+            }
+            foreach (syntaxNodeCount; firstArgSemanticNodeCount + secondArgSyntaxNodeCount + 1 .. firstArgSemanticNodeCount + secondArgSyntaxNodeCount + 5)
+            {
+                auto extra = syntaxNodeCount - (firstArgSemanticNodeCount + secondArgSyntaxNodeCount);
+                assert(firstArgSemanticNodeCount + extra == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(firstArgSemanticNodeCount + extra == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                foreach (i; 0 .. firstArgSemanticNodeCount + extra)
+                {
+                    assert(!range.empty);
+                    if (i < firstArgSemanticNodeCount)
+                        assert(range.front.syntaxNodeIndex == i);
+                    else
+                        assert(range.front.syntaxNodeIndex == secondArgSyntaxNodeCount + i);
+                    assert(range.front.semanticNodeIndex == i);
+                    range.popFront();
+                }
+                assert(range.empty);
+            }
+        }
+    }
+    foreach (ushort firstArgSyntaxNodeCount; 1 .. 5)
+    {
+        {
+            auto foo = new immutable TestSemanticFunction(SemanticArgType.fullyAnalyzedSemanticNode, [
+                immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, firstArgSyntaxNodeCount),
+            ]);
+            foreach (syntaxNodeCount; 0 .. firstArgSyntaxNodeCount + 1)
+            {
+                assert(0 == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(0 == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                assert(range.empty);
+            }
+            foreach (syntaxNodeCount; firstArgSyntaxNodeCount + 1 .. firstArgSyntaxNodeCount + 5)
+            {
+                assert(syntaxNodeCount - firstArgSyntaxNodeCount == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(syntaxNodeCount - firstArgSyntaxNodeCount == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                foreach (i; 0 .. syntaxNodeCount - firstArgSyntaxNodeCount)
+                {
+                    assert(!range.empty);
+                    assert(range.front.syntaxNodeIndex == i + firstArgSyntaxNodeCount);
+                    assert(range.front.semanticNodeIndex == i);
+                    range.popFront();
+                }
+                assert(range.empty);
+            }
+        }
+
+        foreach (ushort secondArgSemanticNodeCount; 1 .. 5)
+        {
+            auto foo = new immutable TestSemanticFunction(SemanticArgType.syntaxNode, [
+                immutable NumberedSemanticArgType(SemanticArgType.syntaxNode, firstArgSyntaxNodeCount),
+                immutable NumberedSemanticArgType(SemanticArgType.fullyAnalyzedSemanticNode, secondArgSemanticNodeCount),
+            ]);
+            foreach (syntaxNodeCount; 0 .. firstArgSyntaxNodeCount)
+            {
+                assert(secondArgSemanticNodeCount == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(0                          == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                assert(range.empty);
+            }
+            foreach (syntaxNodeCount; firstArgSyntaxNodeCount .. firstArgSyntaxNodeCount + secondArgSemanticNodeCount + 5)
+            {
+                auto maxSemanticNodeIndex = min(syntaxNodeCount, firstArgSyntaxNodeCount + secondArgSemanticNodeCount);
+                assert(secondArgSemanticNodeCount                     == foo.semanticNodeBufferCountFor(syntaxNodeCount));
+                assert(maxSemanticNodeIndex - firstArgSyntaxNodeCount == foo.semanticNodeAnalyzeCountFor(syntaxNodeCount));
+                auto range = foo.semanticNodeRange(syntaxNodeCount);
+                foreach (i; firstArgSyntaxNodeCount .. maxSemanticNodeIndex)
+                {
+                    assert(!range.empty);
+                    assert(range.front.syntaxNodeIndex == i);
+                    assert(range.front.semanticNodeIndex == i - firstArgSyntaxNodeCount);
+                    range.popFront();
+                }
+                assert(range.empty);
+            }
+        }
+    }
+}
+
+class SemanticFunctionThanCanAddSymbols : SemanticFunction
+{
+    this(SemanticArgType defaultArgType, immutable(NumberedSemanticArgType)[] firstArgTypes) immutable
+    {
+        super(defaultArgType, firstArgTypes);
+    }
+    override bool canAddSymbols() const { return true; }
+    override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    {
+        assert(0, "code bug: semantic function is missing `mixin SemanticFunctionThanCanAddSymbolsMixin;`");
+    }
+}
+mixin template SemanticFunctionThanCanAddSymbolsMixin()
+{
+    final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    {
+        auto writeableScope = scope_.asWriteable;
+        if (!writeableScope)
+        {
+            // TODO: this should be a nice compiler error message
+            //       here's an example where this could happen
+            //       foo(set(x 100))
+            assert(0, "Error: this semantic function requires a writeable scope!");
+        }
+        return interpretWriteableScope(writeableScope, call/*, used*/);
+    }
+}
 
 
 class RuntimeFunction
@@ -715,11 +1196,7 @@ class UserDefinedFunction : RuntimeFunction
     override void queueForAnalysis()
         in { assert(!queuedForAnalysis && analyzedCode is null); } do
     {
-        analyzedCode = new SemanticNode[rawCode.length].toUarray;
-        foreach (i, ref rawCodeNode; rawCode)
-        {
-            analyzedCode[i].initialize(&rawCode[i]);
-        }
+        analyzedCode = createSemanticNodes(rawCode);
         containingScope.getModule().addFunctionToAnalyze(this);
     }
 
@@ -792,6 +1269,47 @@ auto positiveRange(T,U)(T min, U max)
     return PositiveRange(minCasted, No.isInfinite, max);
 }
 
+class JumpBlock : IScope
+{
+    IReadonlyScope parent;
+    SymbolTable symbolTable;
+    this(IReadonlyScope parent)
+    {
+        this.parent = parent;
+    }
+    //
+    // IDotQualifiable functions
+    //
+    ResolveResult tryGetUnqualified(string symbol)
+    {
+        // !!!!!!!!!!!!!!!!!!!!!!!
+        // TODO: this is probably not right
+        // !!!!!!!!!!!!!!!!!!!!!!!
+        {
+            auto result = symbolTable.get(symbol);
+            if (!result.isNull)
+            {
+                return ResolveResult(result);
+            }
+        }
+        return ResolveResult.noEntryAndAllSymbolsAdded;
+    }
+    //
+    // IReadonlyScope functions
+    //
+    @property final inout(IReadonlyScope) getParent() inout { return parent; }
+    @property final inout(Module) asModule() inout { return null; }
+    @property final inout(IScope) asWriteable() inout { return this; }
+    @property final inout(JumpBlock) asJumpBlock() inout { return this; }
+    //
+    // IScope functions
+    //
+    void add(const(string) symbol, const(TypedValue) value)
+    {
+        assert(0, "not implemented");
+    }
+}
+
 
 //
 // Data Structures For Compile-Time Evaluation
@@ -812,8 +1330,8 @@ struct Value
         uarray!SemanticNode uarray_SemanticNode_;
         TupleNode* TupleNodeP_;
         RuntimeCall* RuntimeCallP_;
-        SyntaxCall* SyntaxCallP_;
         SemanticCall* SemanticCallP_;
+        StatementBlock* StatementBlockP_;
 
         Module Module_;
 
@@ -839,8 +1357,8 @@ struct Value
     this(inout(uarray!SemanticNode) uarray_SemanticNode_) inout { this.uarray_SemanticNode_ = uarray_SemanticNode_; }
     this(inout(TupleNode)* TupleNodeP_) inout { this.TupleNodeP_ = TupleNodeP_; }
     this(inout(RuntimeCall)* RuntimeCallP_) inout { this.RuntimeCallP_ = RuntimeCallP_; }
-    this(inout(SyntaxCall)* SyntaxCallP_) inout { this.SyntaxCallP_ = SyntaxCallP_; }
     this(inout(SemanticCall)* SemanticCallP_) inout { this.SemanticCallP_ = SemanticCallP_; }
+    this(inout(StatementBlock)* StatementBlockP_) inout { this.StatementBlockP_ = StatementBlockP_; }
     this(inout(Module) Module_) inout { this.Module_ = Module_; }
     this(inout(SemanticFunction) SemanticFunction_) inout { this.SemanticFunction_ = SemanticFunction_; }
     this(inout(BuiltinRuntimeFunction) BuiltinRuntimeFunction_) inout { this.BuiltinRuntimeFunction_ = BuiltinRuntimeFunction_; }
@@ -848,6 +1366,7 @@ struct Value
     //this(inout(TypeType) TypeType_) inout { this.TypeType_ = TypeType_; }
     this(inout(TypeClass) TypeClass_) inout { this.TypeClass_ = TypeClass_; }
 }
+
 struct TypedValue
 {
     @property static auto nullValue() { return TypedValue(null); }
@@ -880,7 +1399,7 @@ struct TypedValue
     {
         if (type is null)
             assert(0, "not implemented");
-        return types.formatType(type);
+        return types.formatName(type);
     }
     @property auto formatValue() const
     {

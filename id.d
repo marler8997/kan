@@ -118,5 +118,4 @@ unittest
     writefln("helloID is %s", helloID);
     auto anotherID = Id.pool("another");
     writefln("anotherID is %s", anotherID);
-
 }

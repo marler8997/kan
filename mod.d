@@ -110,13 +110,8 @@ class Module : IScope//, ICodeBlock
         }
 
         parse();
-        semanticNodes = new SemanticNode[syntaxNodes.length].toUarray;
+        semanticNodes = createSemanticNodes(syntaxNodes);
         semanticNodeAnalyzeStates = new AnalyzeState[syntaxNodes.length].toUarray;
-        foreach (i; 0..syntaxNodes.length)
-        {
-            semanticNodes[i].initialize(&syntaxNodes[i]);
-            assert(semanticNodeAnalyzeStates[i] == AnalyzeState.notAnalyzed, "code bug");
-        }
         analyzeStarted = true;
 
         // TODO: need a way to detect recursive calls to this
@@ -132,7 +127,7 @@ class Module : IScope//, ICodeBlock
                 if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
                 {
                     auto oldState = semanticNodeAnalyzeStates[i];
-                    auto newState = analyzer.analyzeModuleNode(this, &node);
+                    auto newState = analyzer.analyzeStatementNode(this, &node);
                     // double check that nothing else modified the current state
                     assert(oldState == semanticNodeAnalyzeStates[i], "code bug");
                     if (newState != oldState)
@@ -165,8 +160,8 @@ class Module : IScope//, ICodeBlock
                 {
                     if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
                     {
-                        auto result = analyzer.analyzeModuleNode!Reporting(this, &node);
-                        assert(result > 0, "code bug: analyzeModuleNode failed but did not report any errors");
+                        auto result = analyzer.analyzeStatementNode!Reporting(this, &node);
+                        assert(result > 0, "code bug: analyzeStatementNode failed but did not report any errors");
                     }
                 }
                 throw quit;
@@ -263,16 +258,21 @@ class Module : IScope//, ICodeBlock
             ResolveResult.noEntryButMoreSymbolsCouldBeAdded;
     }
     //
+    // IReadonlyScope Functions
+    //
+    @property final inout(IReadonlyScope) getParent() inout { return cast(inout(IReadonlyScope)) UniversalScope.instance; }
+    @property final inout(Module) asModule() inout { return this; }
+    @property final inout(IScope) asWriteable() inout { return this; }
+    @property final inout(JumpBlock) asJumpBlock() inout { return null; }
+    //
     // IScope Functions
     //
-    IScope getParent() { return cast()UniversalScope.instance; }
-    Module getModule() { return this; }
     void add(const(string) symbol, const(TypedValue) typedValue)
     {
         auto existing = symbolTable.checkedAdd(symbol, typedValue);
         if (!existing.isNull)
         {
-            writefln("Error: %s already has a definition for %s",
+            writefln("Error: %s already has a definition for symbol '%s'",
                 /*formatLocation(assignment.symbol), */filename, symbol);
             throw quit;
         }
@@ -403,7 +403,7 @@ private Module loadModuleFromFileCommon(string filename, Flag!"rootCodeIsUsed" r
     return newModule;
 }
 
-class UniversalScope : IScope
+class UniversalScope : IReadonlyScope
 {
     mixin singleton;
     //
@@ -421,13 +421,20 @@ class UniversalScope : IScope
         return ResolveResult.noEntryAndAllSymbolsAdded;
     }
     //
+    // IReadonlyScope Functions
+    //
+    @property final inout(IReadonlyScope) getParent() inout { return null; }
+    // TODO: probably return a pseudo universal-module
+    @property final inout(Module) asModule() inout { assert(0, "not implemented"); }
+    @property final inout(IScope) asWriteable() inout { return null; }
+    @property final inout(JumpBlock) asJumpBlock() inout { return null; }
+    /+
+    //
     // IScope Functions
     //
-    IScope getParent() { return null; }
-    // TODO: probably return a pseudo universal-module
-    Module getModule() { assert(0, "not implemented"); }
     void add(const(string) symbol, const(TypedValue) typedValue)
     {
         assert(0, "not sure if adding to the universal scope should be allowed");
     }
+    +/
 }

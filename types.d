@@ -68,9 +68,8 @@ interface IType
     // These functions aren't necessary for a type definition, but it's very useful for
     // error messages and such
     void formatter(StringSink sink) const;
-    void valueFormatter(StringSink sink, const(Value) value) const;
 }
-@property DelegateFormatter formatType(const(IType) type)
+@property DelegateFormatter formatName(const(IType) type)
 {
     return DelegateFormatter(&type.formatter);
 }
@@ -82,7 +81,17 @@ interface IType
         const(Value) value;
         void toString(StringSink sink)
         {
-            type.valueFormatter(sink, value);
+            auto printer = cast(IValuePrinter)type;
+            if (printer)
+            {
+                printer.print(sink, value);
+            }
+            else
+            {
+                sink("[Value of type ");
+                sink((cast(Object)type).classinfo.name);
+                sink(" that type does not implement IValuePrinter]");
+            }
         }
     }
     return Formatter(type, value);
@@ -96,7 +105,12 @@ interface IValueToDotQualifiable
 // A type that when used as a parameter can consume multiple arguments
 interface IVariadicType
 {
-    abstract SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const;
+    SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const;
+}
+
+// A type whose values can be used as conditionals for branching
+interface IConditionalType
+{
 }
 
 interface IRangeType
@@ -108,7 +122,7 @@ interface IRangeType
 // and split it up into a series of interfaces
 interface TypeClass : IType
 {
-    abstract SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const;
+    SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const;
 }
 
 
@@ -128,11 +142,6 @@ class VoidType : TypeType
     // Type Functions
     //
     final override void formatter(StringSink sink) const { sink("void"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
-
 
     @property final override inout(IDotQualifiable) tryAsIDotQualifiable(inout(Value) value) const { return null; }
     final override SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const
@@ -152,10 +161,6 @@ class AnySingleThing : TypeClass, IType
         assert(0, "not implemented");
     }
     final void formatter(StringSink sink) const { sink("AnySingleThing"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -170,7 +175,7 @@ class AnySingleThing : TypeClass, IType
         return SatisfyState.notSatisfied;
     }
 }
-class NumberLiteralType : TypeClass, IType
+class NumberLiteralType : TypeClass, IType, IValuePrinter
 {
     mixin singleton;
 
@@ -190,17 +195,19 @@ class NumberLiteralType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("NumberLiteral"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
-
     //
     // Type Functions
     //
     final override SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const
     {
         assert(0, "not implemented");
+    }
+    //
+    // IValuePrinter Functions
+    //
+    final void print(StringSink sink, const(Value) value) const
+    {
+        sink(get(value).source);
     }
 }
 class SymbolType : TypeClass, IType
@@ -223,10 +230,6 @@ class SymbolType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("symbol"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -261,10 +264,6 @@ class StringType : TypeClass, IType, IValuePrinter
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("string"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
     //
     // IValuePrinter Functions
     //
@@ -293,7 +292,6 @@ class BooleanType : TypeClass, IType
     {
         return TypedValue(instance, Value(true));
     }
-
     //
     // IType Functions
     //
@@ -302,11 +300,6 @@ class BooleanType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("bool"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
-
     //
     // Type Functions
     //
@@ -315,8 +308,6 @@ class BooleanType : TypeClass, IType
         assert(0, "not implemented");
     }
 }
-
-
 
 class TupleLiteralType : IType, IRangeType
 {
@@ -331,10 +322,6 @@ class TupleLiteralType : IType, IRangeType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("tuple"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 }
 
 // TODO: this class could be replaced by TypedNoLimitSetType with
@@ -358,10 +345,6 @@ class UntypedNoLimitSetType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("set"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -423,11 +406,7 @@ class TypedNoLimitSetType : TypeClass, IType
     }
     final override void formatter(StringSink sink) const
     {
-        formattedWrite(sink,"TypedNoLimitset(%s)", type.formatType);
-    }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
+        formattedWrite(sink,"TypedNoLimitset(%s)", type.formatName);
     }
 
     //
@@ -552,11 +531,6 @@ class StringSinkType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("StringSink"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
-
     //
     // Type Function
     //
@@ -584,10 +558,6 @@ class PrintableType : TypeClass, IType
     // Type Functions
     //
     final override void formatter(StringSink sink) const { sink("Printable"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     final override SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const
     {
@@ -619,10 +589,6 @@ class FlagType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("flag"); }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -658,11 +624,7 @@ class Multi : TypeClass, IType
     }
     final override void formatter(StringSink sink) const
     {
-        formattedWrite(sink,"multi(%s %s)", type.formatType, countRange);
-    }
-    final void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
+        formattedWrite(sink,"multi(%s %s)", type.formatName, countRange);
     }
 
     //
@@ -711,10 +673,6 @@ abstract class ScopeType : TypeClass, IType, IValueToDotQualifiable
         assert(0, "not implemented");
     }
     override void formatter(StringSink sink) const { sink("scope"); }
-    void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // IValueToDotQualifiable Functions
@@ -744,10 +702,6 @@ class ModuleType : ScopeType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("module"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // IValueToDotQualifiable Functions
@@ -780,10 +734,6 @@ class TypeType : TypeClass, IType, IValueToDotQualifiable
         assert(0, "not implemented");
     }
     override void formatter(StringSink sink) const { sink("type"); }
-    void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // IValueToDotQualifiable Functions
@@ -851,11 +801,7 @@ class OptionalType : TypeClass, IType
     }
     final override void formatter(StringSink sink) const
     {
-        formattedWrite(sink,"optional(%s)", type.formatType);
-    }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
+        formattedWrite(sink,"optional(%s)", type.formatName);
     }
 
     //
@@ -886,10 +832,6 @@ class SemanticFunctionType : IType
         assert(0, "not implemented");
     }
     override void formatter(StringSink sink) const { sink("SemanticFunction"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 }
 
 class RuntimeFunctionType : TypeClass, IType
@@ -906,10 +848,6 @@ class RuntimeFunctionType : TypeClass, IType
         assert(0, "not implemented");
     }
     override void formatter(StringSink sink) const { sink("RuntimeFunction"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -933,10 +871,6 @@ class UserDefinedRuntimeFunctionType : RuntimeFunctionType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("UserDefinedRuntimeFunction"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -960,10 +894,6 @@ class RuntimeCallType : TypeClass, IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("call"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -973,24 +903,7 @@ class RuntimeCallType : TypeClass, IType
         assert(0, "not implemented");
     }
 }
-class SyntaxCallType : IType
-{
-    mixin singleton;
-    mixin valueCreatorAndGetter!("inout", "SyntaxCall*");
-    //
-    // IType Functions
-    //
-    bool supports(SemanticNode* node)
-    {
-        assert(0, "not implemented");
-    }
-    final override void formatter(StringSink sink) const { sink("SyntaxCall"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
-}
-class SemanticCallType : IType
+class SemanticCallType : IType, IValuePrinter
 {
     mixin singleton;
     mixin valueCreatorAndGetter!("inout", "SemanticCall*");
@@ -1002,7 +915,10 @@ class SemanticCallType : IType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("SemanticCall"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
+    //
+    // IValuePrinter functions
+    //
+    final void print(StringSink sink, const(Value) value) const
     {
         auto node = get(value);
         formattedWrite(sink, "SemanticCall to %s", node.syntaxNode.functionName);
@@ -1023,10 +939,6 @@ class BuiltinRuntimeFunctionType : RuntimeFunctionType
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("BuiltinRuntimeFunction"); }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
 
     //
     // Type Functions
@@ -1058,10 +970,6 @@ class EnumType : TypeClass, IType, IDotQualifiable, IValuePrinter
     {
         sink("enum");
     }
-    override void valueFormatter(StringSink sink, const(Value) value) const
-    {
-        assert(0, "not implemented");
-    }
     //
     // IDotQualifiable Function
     //
@@ -1087,6 +995,23 @@ class EnumType : TypeClass, IType, IDotQualifiable, IValuePrinter
     // Type Functions
     //
     final override SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const
+    {
+        assert(0, "not implemented");
+    }
+}
+
+class StatementBlockType : IType
+{
+    mixin singleton;
+    mixin valueCreatorAndGetter!("inout", "StatementBlock*");
+    //
+    // IType Functions
+    //
+    final bool supports(SemanticNode* node)
+    {
+        assert(0, "not implemented");
+    }
+    final override void formatter(StringSink sink) const
     {
         assert(0, "not implemented");
     }

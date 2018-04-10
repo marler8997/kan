@@ -110,9 +110,17 @@ pragma(inline) uint toUint(size_t size)
     return cast(uint)size;
 }
 
+pragma(inline) T unconst(T)(const(T) obj)
+{
+    return cast(T)obj;
+}
 pragma(inline) immutable(T) toImmutable(T)(T obj)
 {
     return cast(immutable(T))obj;
+}
+pragma(inline) const(T) toConst(T)(T obj)
+{
+    return cast(const(T))obj;
 }
 
 mixin template singleton(Flag!"ctor" ctor = Yes.ctor)
@@ -120,7 +128,7 @@ mixin template singleton(Flag!"ctor" ctor = Yes.ctor)
     __gshared immutable static instance = new immutable typeof(this)();
     static if (ctor)
     {
-        private this() immutable {}
+        private this() immutable { }
     }
 }
 
