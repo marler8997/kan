@@ -85,20 +85,22 @@ template IdTemplate(TableIndex, TableOffset, Length)
                 assert(tableIndex < TableIndex.max, "table index type not large enough");
 
                 // allocate table
-                auto table = Table(cast(char*)malloc(TableOffset.max), 0);
-                if (table.buffer is null)
                 {
-                    assert(0, "out of memory for string tables");
+                    auto buffer = cast(char*)malloc(TableOffset.max);
+                    if (buffer is null)
+                    {
+                        assert(0, "out of memory for string tables");
+                    }
+                    tables.put(Table(buffer, 0));
                 }
-                tables.put(table);
-                tableOffset = table.tryAppend(idString);
+                tableOffset = (&tables.data[tableIndex]).tryAppend(idString);
                 if (tableOffset == TableOffset.max)
                 {
                     assert(0, "id string it too large for table!");
                 }
                 break;
             }
-            tableOffset = tables.data[tableIndex].tryAppend(idString);
+            tableOffset = (&tables.data[tableIndex]).tryAppend(idString);
             if (tableOffset != TableOffset.max)
             {
                 break;

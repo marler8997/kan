@@ -16,7 +16,7 @@ import more.format : StringSink;
 import more.file : readFile;
 
 static import global;
-import common : uarray, toUarray, toUint, from, singleton, quit,
+import common : uarray, toUarray, toUint, toImmutable, from, singleton, quit,
                 DirSeparatorChar, isDirSeparator, replaceAll, formatDir;
 import log;
 import id : Id;
@@ -29,7 +29,7 @@ import interpreter : CodeBlockPosition, Interpreter;
 import analyzer : Reporting, AnalyzeState, greaterThan;
 static import analyzer;
 
-class Module : IScope//, ICodeBlock
+class Module : IScope
 {
     string filename;
     const Flag!"rootCodeIsUsed" rootCodeIsUsed;
@@ -42,11 +42,24 @@ class Module : IScope//, ICodeBlock
 
     private size_t nodesAddedSymbols;
     private size_t nodesAnalyzed;
+    /*
     mixin(bitfields!(
         bool, "parsed", 1,
-        bool, "analyzeStarted", 1,
+        //bool, "analyzeStarted", 1,
         void, null, 6
     ));
+    */
+    enum State : ubyte
+    {
+        initial,
+        parsed,
+        pass1Started,
+        pass1Done,
+        pass2Started,
+        pass2Done,
+    }
+    State state;
+    bool parsed() const { return state >= State.parsed; }
 
     SymbolTable symbolTable;
 
@@ -83,17 +96,18 @@ class Module : IScope//, ICodeBlock
     }
     void parse()
     {
+        if (state >= State.parsed)
+            return;
+
         read();
-        if (!parsed)
-        {
-            auto parser = Parser(contents.ptr, filename);
-            auto nodesBuilder = Appender!(SyntaxNode[])();
-            parser.parse(&nodesBuilder);
-            this.syntaxNodes = nodesBuilder.data.toUarray;
-            this.parsed = true;
-        }
+        auto parser = Parser(contents.ptr, filename);
+        auto nodesBuilder = Appender!(SyntaxNode[])();
+        parser.parse(&nodesBuilder);
+        this.syntaxNodes = nodesBuilder.data.toUarray;
+        state = State.parsed;
     }
 
+    /+
     bool haveAllTopLevelSymbols()
     {
         // Need a way of knowing all the ways symbols can be added so that when
@@ -101,20 +115,48 @@ class Module : IScope//, ICodeBlock
         // to a "lower scope".
         return analyzeStarted && nodesAddedSymbols == semanticNodes.length;
     }
+    +/
 
-    void analyze()
+    uint analyzePass1()
     {
-        if (analyzeStarted)
-        {
-            return;
-        }
+        if (state >= State.pass1Started)
+            return 0;
 
         parse();
-        semanticNodes = createSemanticNodes(syntaxNodes);
-        semanticNodeAnalyzeStates = new AnalyzeState[syntaxNodes.length].toUarray;
-        analyzeStarted = true;
+        assert(state == State.parsed);
+        state = State.pass1Started;
 
-        // TODO: need a way to detect recursive calls to this
+        semanticNodes = createSemanticNodes(syntaxNodes);
+        uint errorCount = 0;
+        foreach (ref node; semanticNodes)
+        {
+            errorCount += analyzer.analyzeStatementNodePass1(this, &node);
+        }
+        assert(state == State.pass1Started, "codebug");
+        state = State.pass1Done;
+        return errorCount;
+    }
+
+    void analyzePass2(Flag!"runContext" runContext)
+    {
+        if (state >= State.pass2Started)
+            return;
+
+        auto errorCount = analyzePass1();
+        if (state == State.pass1Started)
+        {
+            from!"std.stdio".writefln("PossibleError: circular reference(1)?");
+            throw quit;
+        }
+        if (errorCount > 0)
+        {
+            // errors already logged
+            throw quit;
+        }
+        assert(state == State.pass1Done, "codebug");
+        state = State.pass2Started;
+
+        semanticNodeAnalyzeStates = new AnalyzeState[syntaxNodes.length].toUarray;
 
         verbose(0, "analyzing '%s'", filename);
 
@@ -168,7 +210,76 @@ class Module : IScope//, ICodeBlock
             }
         }
     }
+    /+
+    void analyze()
+    {
+        if (analyzeStarted)
+        {
+            return;
+        }
 
+        parse();
+        semanticNodes = createSemanticNodes(syntaxNodes);
+        semanticNodeAnalyzeStates = new AnalyzeState[syntaxNodes.length].toUarray;
+        analyzeStarted = true;
+
+        verbose(0, "analyzing '%s'", filename);
+
+        // Pass 1, populate symbol tables
+        {
+        }
+
+    ANALYZE_GLOBAL_NODES_LOOP:
+        while (nodesAnalyzed < semanticNodes.length)
+        {
+            auto nodesAnalyzedBeforePass = nodesAnalyzed;
+            foreach (i, ref node; semanticNodes)
+            {
+                if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
+                {
+                    auto oldState = semanticNodeAnalyzeStates[i];
+                    auto newState = analyzer.analyzeStatementNode(this, &node);
+                    // double check that nothing else modified the current state
+                    assert(oldState == semanticNodeAnalyzeStates[i], "code bug");
+                    if (newState != oldState)
+                    {
+                        assert(newState.greaterThan(oldState), "code bug");
+                        semanticNodeAnalyzeStates[i] = newState;
+                        // NOTE: this logic is currently based on AnalyzeState having
+                        //       3 values: notAnalyzed, addedSymbols and analyzed
+                        if (oldState < AnalyzeState.addedSymbols)
+                        {
+                            assert(newState >= AnalyzeState.addedSymbols, "code bug");
+                            nodesAddedSymbols++;
+                        }
+                        if (newState == AnalyzeState.analyzed)
+                        {
+                            nodesAnalyzed++;
+                            if (nodesAnalyzed >= semanticNodes.length)
+                            {
+                                break ANALYZE_GLOBAL_NODES_LOOP;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // if nothing new was analyzed
+            if (nodesAnalyzed == nodesAnalyzedBeforePass)
+            {
+                foreach (i, ref node; semanticNodes)
+                {
+                    if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
+                    {
+                        auto result = analyzer.analyzeStatementNode!Reporting(this, &node);
+                        assert(result > 0, "code bug: analyzeStatementNode failed but did not report any errors");
+                    }
+                }
+                throw quit;
+            }
+        }
+    }
+    +/
 
     private Builder!(UserDefinedFunction, GCDoubler!32) functionsToAnalyze;
     uint functionsToAnalyzeCount()
@@ -244,7 +355,12 @@ class Module : IScope//, ICodeBlock
     //
     ResolveResult tryGetUnqualified(string symbol)
     {
-        analyze();
+        auto errorCount = analyzePass1();
+        if (state < State.pass1Done)
+        {
+            from!"std.stdio".writefln("PossibleError: circular reference?");
+            throw quit;
+        }
 
         {
             auto result = symbolTable.get(symbol);
@@ -254,8 +370,13 @@ class Module : IScope//, ICodeBlock
             }
         }
 
-        return haveAllTopLevelSymbols() ? ResolveResult.noEntryAndAllSymbolsAdded :
-            ResolveResult.noEntryButMoreSymbolsCouldBeAdded;
+        return ResolveResult.noEntryAndAllSymbolsAdded;
+        //return haveAllTopLevelSymbols() ? ResolveResult.noEntryAndAllSymbolsAdded :
+        //    ResolveResult.noEntryButMoreSymbolsCouldBeAdded;
+    }
+    void dumpSymbols() const
+    {
+        symbolTable.dump();
     }
     //
     // IReadonlyScope Functions
@@ -267,13 +388,21 @@ class Module : IScope//, ICodeBlock
     //
     // IScope Functions
     //
-    void add(const(string) symbol, const(TypedValue) typedValue)
+    void add(const(string) symbol, TypedValue typedValue)
     {
         auto existing = symbolTable.checkedAdd(symbol, typedValue);
         if (!existing.isNull)
         {
             writefln("Error: %s already has a definition for symbol '%s'",
                 /*formatLocation(assignment.symbol), */filename, symbol);
+            throw quit;
+        }
+    }
+    void evaluated(const(string) symbol, TypedValue typedValue)
+    {
+        if (symbolTable.update(symbol, typedValue).failed)
+        {
+            writefln("Error: CodeBug: attempted to update symbol '%s' but it does not exist!", symbol);
             throw quit;
         }
     }
@@ -403,6 +532,19 @@ private Module loadModuleFromFileCommon(string filename, Flag!"rootCodeIsUsed" r
     return newModule;
 }
 
+struct BuiltinSymbol
+{
+    string symbol;
+    TypedValue typedValue;
+
+    static import builtin;
+    import types;
+    __gshared static immutable values = [
+        immutable BuiltinSymbol("u32", TypeTypeTemplate!(UnsignedFixedWidthType!32).instance.createTypedValue().toImmutable),
+        immutable BuiltinSymbol("leftIsLess", RuntimeFunctionType.instance.createTypedValue(builtin.leftIsLessFunction.instance)),
+    ];
+}
+
 class UniversalScope : IReadonlyScope
 {
     mixin singleton;
@@ -411,14 +553,17 @@ class UniversalScope : IReadonlyScope
     //
     ResolveResult tryGetUnqualified(string symbol)
     {
-        static import builtin;
-        import types : RuntimeFunctionType;
-        if (symbol == "leftIsLess")
+        //from!"std.stdio".writefln("Universal.tryGetUnqualified(\"%s\")", symbol);
+        foreach (ref builtinSymbol; BuiltinSymbol.values)
         {
-            return ResolveResult(RuntimeFunctionType.instance.createTypedValue(builtin.leftIsLessFunction.instance));
+            if (builtinSymbol.symbol == symbol)
+                return ResolveResult(builtinSymbol.typedValue);
         }
-        // TODO: add builtin stuff here
         return ResolveResult.noEntryAndAllSymbolsAdded;
+    }
+    void dumpSymbols() const
+    {
+        assert(0, "UniversalScope.dumpSymbols not impelemented");
     }
     //
     // IReadonlyScope Functions

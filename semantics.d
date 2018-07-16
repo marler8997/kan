@@ -316,7 +316,7 @@ struct SemanticNode
     }
 
     // NOTE: it is assumed this node has already been analyzed!
-    final auto getAnalyzedTypedValue(Flag!"resolveSymbols" resolveSymbols)
+    final TypedValue getAnalyzedTypedValue(Flag!"resolveSymbols" resolveSymbols)
     {
         final switch(nodeType)
         {
@@ -330,8 +330,9 @@ struct SemanticNode
                 return asTypedValue;
             if (symbol.resolved.isNull)
             {
-                from!"std.stdio".writefln("symbol %s resolved is null", this.symbol.syntaxNode.source);
-                assert(0, "not implemented");
+                from!"std.stdio".writefln("FatalError: symbol %s resolved is null, not implemented", this.symbol.syntaxNode.source);
+                //throw quit;
+                assert(0);
             }
             return symbol.resolved;
         case SemanticNodeType.semanticCall:
@@ -369,6 +370,21 @@ uarray!SemanticNode createSemanticNodes(const uarray!SyntaxNode syntaxNodes)
         semanticNodes[i].initialize(&syntaxNodes[i]);
     }
     return semanticNodes;
+}
+
+class UnevaluatedSymbol
+{
+    IScope evaluationScope;
+    this(IScope evaluationScope)
+    {
+        this.evaluationScope = evaluationScope;
+    }
+    abstract TypedValue tryEvaluate();
+    /*
+    {
+        assert(0, "UnevaluatedSymbol.tryEvaluate not implemented");
+    }
+    */
 }
 
 string tryEvaluateToSymbol(SemanticNode* node)
@@ -443,6 +459,7 @@ interface IDotQualifiable
 {
     // try to get a symbol table entry that matches the given symbol
     ResolveResult tryGetUnqualified(string symbol);
+    void dumpSymbols() const;
 }
 
 ResolveResult tryGetQualified(IDotQualifiable qualifiable, string symbol)
@@ -460,7 +477,7 @@ ResolveResult tryGetQualified(IDotQualifiable qualifiable, string symbol)
         {
             return resolved;
         }
-        auto resolvedAsQualifiable = resolved.entry.tryAsIDotQualifiable;
+        const resolvedAsQualifiable = resolved.entry.tryAsIDotQualifiable;
         if (resolvedAsQualifiable is null)
         {
             from!"std.stdio".writefln("Error: cannot access member '%s' from an object of type '%s', it doesn't have any dotted members",
@@ -507,7 +524,12 @@ inout(JumpBlock) tryGetJumpBlock(inout(IReadonlyScope) scope_)
 
 interface IScope : IReadonlyScope
 {
-    void add(const(string) symbol, const(TypedValue) value);
+    void add(const(string) symbol, TypedValue value);
+    void evaluated(const(string) symbol, TypedValue value);
+}
+void addUnevaluatedSymbol(IScope scope_, const(string) symbol)
+{
+    scope_.add(symbol, TypedValue(UnevaluatedSymbolType.instance, Value()));
 }
 
 struct Parameter
@@ -792,6 +814,7 @@ class SemanticFunction
     {
         return false;
     }
+    abstract uint interpretPass1(IScope scope_, SemanticCall* call);
     abstract SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const;
 
     final void printErrorsForInterpret(IReadonlyScope scope_, SemanticCall* call, Flag!"used" used) const
@@ -1294,6 +1317,10 @@ class JumpBlock : IScope
         }
         return ResolveResult.noEntryAndAllSymbolsAdded;
     }
+    void dumpSymbols() const
+    {
+        assert(0, "JumpBlock.dumpSymbols not impelemented");
+    }
     //
     // IReadonlyScope functions
     //
@@ -1304,7 +1331,11 @@ class JumpBlock : IScope
     //
     // IScope functions
     //
-    void add(const(string) symbol, const(TypedValue) value)
+    void add(const(string) symbol, TypedValue value)
+    {
+        assert(0, "not implemented");
+    }
+    void evaluated(const(string) symbol, TypedValue value)
     {
         assert(0, "not implemented");
     }
@@ -1318,6 +1349,8 @@ struct Value
 {
     union
     {
+        UnevaluatedSymbol UnevaluatedSymbol_;
+
         bool bool_;
         string string_;
         RuntimeFunction RuntimeFunction_;
@@ -1345,8 +1378,13 @@ struct Value
         //TypeType TypeType_;
         TypeClass TypeClass_;
     }
+    this(inout(UnevaluatedSymbol) UnevaluatedSymbol_) inout { this.UnevaluatedSymbol_ = UnevaluatedSymbol_; }
+    this(UnevaluatedSymbol UnevaluatedSymbol_) { this.UnevaluatedSymbol_ = UnevaluatedSymbol_; }
+
     this(bool bool_) inout { this.bool_ = bool_; }
+    this(bool bool_) { this.bool_ = bool_; }
     this(string string_) inout { this.string_ = string_; }
+    this(string string_) { this.string_ = string_; }
     this(inout(RuntimeFunction) RuntimeFunction_) inout { this.RuntimeFunction_ = RuntimeFunction_; }
 
     this(inout(SyntaxNode)* SyntaxNodeP_) inout { this.SyntaxNodeP_ = SyntaxNodeP_; }
@@ -1376,7 +1414,8 @@ struct TypedValue
     {
         return TypedValue(VoidType.instance);
     }
-    @property bool isVoid() const { return this.type is VoidType.instance; }
+    @property bool isVoid() const { return type.val is VoidType.instance; }
+    @property final bool isUnevaluatedSymbol() const { return type.val is UnevaluatedSymbolType.instance; }
 
     Value value = void;
     Rebindable!IType type;
@@ -1391,10 +1430,15 @@ struct TypedValue
     }
     @property final inout(IDotQualifiable) tryAsIDotQualifiable() inout
     {
-        //return type.tryAsIDotQualifiable(value);
-        auto converter = cast(IValueToDotQualifiable)type;
-        return converter ? converter.tryAsIDotQualifiable(value) : null;
+        auto castedType = cast(IValueToDotQualifiable)type;
+        return castedType ? castedType.tryAsIDotQualifiable(value) : null;
     }
+
+    @property final inout(UnevaluatedSymbol) tryAsUnevaluatedSymbol() inout
+    {
+        return isUnevaluatedSymbol ? value.UnevaluatedSymbol_ : null;
+    }
+
     @property DelegateFormatter formatType() const
     {
         if (type is null)

@@ -10,10 +10,12 @@ import types;
 import semantics;// : peelQualifier, IDotQualifiable, SymbolEntryDirect, SemanticNode, Type;
 import mod : Module;
 
-// Used as a template parameter for functions to execute in 2 different modes.
-// It executes normaly when using ReportErrors.no, but when it is ReportErrors.yes
-// it means semantic analysis has failed and any unresolved analysis should be
-// considered errors and reported.
+/**
+Used as a template parameter for functions to execute in 2 different modes.
+It executes normaly when using ReportErrors.no, but when it is ReportErrors.yes
+it means semantic analysis has failed and any unresolved analysis should be
+considered errors and reported.
+*/
 enum ReportErrors {no, yes}
 
 alias NotReporting = ReportErrors.no;
@@ -250,7 +252,8 @@ ReportReturn!(reportErrors, void) analyzeRuntimeCall(ReportErrors reportErrors =
         }
     case RuntimeCallAnalyzeState.resolveFunctionSymbol:
         //assert(used);
-        //from!"std.stdio".writefln("[DEBUG] resolving function '%s'", call.syntaxNode.functionName);
+        from!"std.stdio".writefln("[DEBUG] resolving function '%s'", call.syntaxNode.functionName);
+        // !!!!!!!!!!!
         auto symbolResult = tryResolveQualified!reportErrors(scope_, call.syntaxNode.functionName);
         static if (reportErrors)
         {
@@ -300,6 +303,16 @@ ReportReturn!(reportErrors, void) analyzeRuntimeCall(ReportErrors reportErrors =
     case RuntimeCallAnalyzeState.done:
         assert(0, CodeBugInvalidStateMessage);
     }
+}
+
+uint analyzeRuntimeCallPass1(IScope scope_, RuntimeCall* call)
+{
+    uint errorCount = 0;
+    foreach (ref arg; call.arguments)
+    {
+        errorCount += analyzeValuePass1(scope_, &arg);
+    }
+    return errorCount;
 }
 
 // Note: after a successful call, make sure to analyze the returnValue (call.returnValue)
@@ -358,6 +371,20 @@ private ReportReturn!(reportErrors, AnalyzeState) analyzeSemanticCall(ReportErro
         return 0; // no error
     else
         return AnalyzeState.analyzed;
+}
+
+uint analyzeSemanticCallPass1(IScope scope_, SemanticCall* call)
+{
+    uint errorCount = 0;
+    foreach (ref arg; call.arguments)
+    {
+        errorCount += analyzeValuePass1(scope_, &arg);
+    }
+    if (errorCount == 0)
+    {
+        errorCount += call.function_.interpretPass1(scope_, call);
+    }
+    return errorCount;
 }
 
 // A special "pre-analysis" of a function argument, does not
@@ -458,6 +485,34 @@ ReportReturn!(reportErrors, Flag!"analyzed") analyzeValue(ReportErrors reportErr
     }
 }
 
+uint analyzeValuePass1(IScope scope_, SemanticNode* semanticNode)
+{
+    final switch(semanticNode.nodeType)
+    {
+    case SemanticNodeType.typedValue:
+        return 0; // typed values probably won't affect pass1
+    case SemanticNodeType.tuple:
+        assert(0, "analyzeStatementNode for tuples not implemented");
+    case SemanticNodeType.symbol:
+        return 0; // symbols alone probably won't affect pass1
+    case SemanticNodeType.semanticCall:
+        return analyzeSemanticCallPass1(scope_, &semanticNode.semanticCall);
+    case SemanticNodeType.runtimeCall:
+        return analyzeRuntimeCallPass1(scope_, &semanticNode.runtimeCall);
+    case SemanticNodeType.statementBlock:
+        {
+            uint errorCount = 0;
+            foreach (ref statement; semanticNode.statementBlock.statements)
+            {
+                errorCount += analyzeStatementNodePass1(semanticNode.statementBlock.scope_, &statement);
+            }
+            return errorCount;
+        }
+    case SemanticNodeType.jump:
+        return 0; // ignore jumps in pass 1 for now
+    }
+}
+
 // Analyze a semantic node as a "statement".  This differs from analyzeValue which would typically
 // be analyzing a node for its return value for something like a function argument.  This
 // funcion analyzes a node to perform some operation.
@@ -486,19 +541,30 @@ ReportReturn!(reportErrors, AnalyzeState) analyzeStatementNode(ReportErrors repo
         from!"std.stdio".writefln("Error: lone symbol '%s' is not a valid statement", semanticNode.syntaxNode.source);
         throw quit;
     case SemanticNodeType.semanticCall:
+        {
+            auto analyzeState = analyzeSemanticCall!reportErrors(scope_, &semanticNode.semanticCall/*, module_.rootCodeIsUsed ? Yes.used : No.used*/);
+            if (analyzeState == AnalyzeState.analyzed)
+            {
+                return analyzeStatementNode!reportErrors(scope_, semanticNode.semanticCall.returnValue);
+            }
+            return analyzeState;
+            /+
         static if (reportErrors)
-        {
+        {{
+
             //from!"std.stdio".writefln("function '%s'", semanticNode.semanticCall.syntaxNode.functionName);
-            assert(0, "analyzeStatementNode!Reporting for semanticCall not implemented");
-        }
+            assert(0, format("analyzeStatementNode!Reporting for semanticCall '%s' not implemented", semanticNode.semanticCall.syntaxNode.functionName));
+        }}
         else
-        {
+        {{
             auto analyzeState = analyzeSemanticCall(scope_, &semanticNode.semanticCall/*, module_.rootCodeIsUsed ? Yes.used : No.used*/);
             if (analyzeState == AnalyzeState.analyzed)
             {
                 return analyzeStatementNode(scope_, semanticNode.semanticCall.returnValue);
             }
             return analyzeState;
+        }}
+        +/
         }
     case SemanticNodeType.runtimeCall:
         {
@@ -566,6 +632,37 @@ ReportReturn!(reportErrors, AnalyzeState) analyzeStatementNode(ReportErrors repo
             }
             return result;
         }
+    }
+}
+
+// Analyze a semantic node as a "statement".  This differs from analyzeValue which would typically
+// be analyzing a node for its return value for something like a function argument.  This
+// funcion analyzes a node to perform some operation.
+uint analyzeStatementNodePass1(IScope scope_, SemanticNode* semanticNode)
+{
+    final switch(semanticNode.nodeType)
+    {
+    case SemanticNodeType.typedValue:
+        return 0; // typed values probably won't affect pass1
+    case SemanticNodeType.tuple:
+        assert(0, "analyzeStatementNode for tuples not implemented");
+    case SemanticNodeType.symbol:
+        return 0; // symbols alone probably won't affect pass1
+    case SemanticNodeType.semanticCall:
+        return analyzeSemanticCallPass1(scope_, &semanticNode.semanticCall);
+    case SemanticNodeType.runtimeCall:
+        return analyzeRuntimeCallPass1(scope_, &semanticNode.runtimeCall);
+    case SemanticNodeType.statementBlock:
+        {
+            uint errorCount = 0;
+            foreach (ref statement; semanticNode.statementBlock.statements)
+            {
+                errorCount += analyzeStatementNodePass1(semanticNode.statementBlock.scope_, &statement);
+            }
+            return errorCount;
+        }
+    case SemanticNodeType.jump:
+        return 0; // ignore jumps in pass 1 for now
     }
 }
 

@@ -44,6 +44,7 @@ mixin template valueCreatorAndGetter(string typeModifier, string typeName)
     enum code = `
     final auto createTypedValue(` ~ typeModifier ~ ` ` ~ typeName ~ ` value) const
     {
+        //pragma(msg, "` ~ typeName ~ `");
         return ` ~ typeModifier ~ ` TypedValue(this, ` ~ typeModifier ~ ` Value(value));
     }
     final auto get(inout(Value) value) const
@@ -125,6 +126,20 @@ interface TypeClass : IType
     SatisfyState tryConsume(IScope scope_, SemanticNode*[] args, ushort* offset) const;
 }
 
+class UnevaluatedSymbolType : IType
+{
+    mixin singleton;
+    mixin valueCreatorAndGetter!("inout", "UnevaluatedSymbol");
+
+    bool supports(SemanticNode* node)
+    {
+        assert(0, "CodeBug: The supports function probably shouldn't be called on an unevaluated symbol!");
+    }
+    void formatter(StringSink sink) const
+    {
+        sink("<unevaluated-symbol>");
+    }
+}
 
 class VoidType : TypeType
 {
@@ -599,6 +614,37 @@ class FlagType : TypeClass, IType
     }
 }
 
+// The "Integer" type is an ifinite precision whole number
+class IntegerType : IType
+{
+    mixin singleton;
+
+    //mixin valueCreatorAndGetter!("", "string");
+
+    //
+    // IType Functions
+    //
+    final bool supports(SemanticNode* node)
+    {
+        assert(0, "not implemented");
+    }
+    override void formatter(StringSink sink) const { sink("integer"); }
+}
+
+class UnsignedType : IntegerType
+{
+    mixin singleton;
+
+    override void formatter(StringSink sink) const { sink("unsigned"); }
+}
+
+class UnsignedFixedWidthType(ushort bitWidth) : UnsignedType
+{
+    mixin singleton;
+    override void formatter(StringSink sink) const { formattedWrite(sink, "u%s", bitWidth); }
+}
+
+
 class Multi : TypeClass, IType
 {
     static auto singletonAnyCountOf(T)()
@@ -720,6 +766,8 @@ class ModuleType : ScopeType
     }
 }
 
+
+// A "TypeType" is a "Type" that can be "hold" another type.
 class TypeType : TypeClass, IType, IValueToDotQualifiable
 {
     mixin singleton;
@@ -773,6 +821,17 @@ class TypeType : TypeClass, IType, IValueToDotQualifiable
         */
     }
 }
+
+class TypeTypeTemplate(T) : TypeType
+{
+    mixin singleton;
+
+    static TypedValue createTypedValue()
+    {
+        return TypedValue(instance, Value());
+    }
+}
+
 
 
 class OptionalType : TypeClass, IType
@@ -983,6 +1042,10 @@ class EnumType : TypeClass, IType, IDotQualifiable, IValuePrinter
             }
         }
         return ResolveResult.noEntryAndAllSymbolsAdded;
+    }
+    void dumpSymbols() const
+    {
+        assert(0, "EnumType.dumpSymbols not impelemented");
     }
     //
     // IValuePrinter Functions

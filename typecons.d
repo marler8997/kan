@@ -10,7 +10,10 @@ struct Rebindable(T)
         const(T) const_;
         immutable(T) immutable_;
     }
-    alias const_ this;
+    //alias const_ this;
+    T val() const { return cast(T)rebinder; }
+    alias val this;
+
     @trusted pure nothrow @nogc
     {
         this(T initializer)

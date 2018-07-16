@@ -1,0 +1,29 @@
+
+// todo define the HANDLE type
+// todo define the BOOL type
+
+import(windows)
+
+absorb(windows)
+
+requireDll("kernel32.dll" {
+
+set(GetStdHandle function(HANDLE
+    DWORD stdHandle
+))
+
+// TODO: make a wrapper around WriteFile
+//       it should be defined in the same set call and translate
+//       a single "data/length" variable to the data/length arguments for the actual function
+// TODO: extern(Windows)
+set(WriteFile function(BOOL {
+    HANDLE file
+    const(ubyte) data
+    u32 length
+    u32* lengthWritten
+    void* overlapped
+}))
+
+
+
+})

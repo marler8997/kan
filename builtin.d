@@ -11,7 +11,7 @@ import syntax : SyntaxNodeType, SyntaxNode, CallSyntaxNode, base;
 import semantics;
 import types;// : VoidType, Anything, NumberType, SymbolType, Multi, StringType, PrintableType;
 import symtab : SymbolTable;
-import mod : loadImport, Module;
+import mod : sliceModuleBaseName, loadImport, Module;
 import analyzer : AnalyzeState, analyzeStatementNode, analyzeValue, analyzeRuntimeCall;
 import interpreter : Interpreter;
 
@@ -62,6 +62,8 @@ SemanticFunction tryFindSemanticFunction(const(CallSyntaxNode)* call)
         return cast()symbolFunction.instance.checkAndGet(call);
     if (call.functionName == "enum")
         return cast()enumFunction.instance.checkAndGet(call);
+    if (call.functionName == "dumpSymbolTable")
+        return cast()dumpSymbolTableFunction.instance.checkAndGet(call);
 
     //
     // All Other Semantic Functions
@@ -97,6 +99,11 @@ class flagFunction : SemanticFunction
     {
         super(SemanticArgType.syntaxNode, null);
     }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // do nothing, no symbols to add
+        return 0;
+    }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {
         if (call.syntaxNode.arguments.length != 1)
@@ -119,6 +126,11 @@ class symbolFunction : SemanticFunction
     private this() immutable
     {
         super(SemanticArgType.syntaxNode, null);
+    }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // do nothing, no symbols to add
+        return 0;
     }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {
@@ -143,6 +155,11 @@ class enumFunction : SemanticFunction
     {
         super(SemanticArgType.syntaxNode, null);
     }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // do nothing, no symbols to add
+        return 0;
+    }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {
         auto symbols = new string[call.syntaxNode.arguments.length];
@@ -153,6 +170,29 @@ class enumFunction : SemanticFunction
         auto node = new SemanticNode();
         node.initTypedValue(call.syntaxNode.base, TypeType.instance.createTypedValue(new EnumType(symbols)));
         return SemanticCallResult(node);
+    }
+}
+
+class dumpSymbolTableFunction : SemanticFunction
+{
+    mixin singleton!(No.ctor);
+    private this() immutable
+    {
+        super(SemanticArgType.syntaxNode, null);
+    }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // do nothing, no symbols to add
+        return 0;
+    }
+    final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    {
+        if (call.syntaxNode.arguments.length != 0)
+        {
+            assert(0, "dumpSymbolTable function with more than 0 arguments is not implemented");
+        }
+        scope_.dumpSymbols();
+        return SemanticCallResult(SemanticNode.newVoid(call.syntaxNode.base));
     }
 }
 
@@ -177,8 +217,7 @@ class importFunction : SemanticFunctionThanCanAddSymbols
         ], null, FunctionFlags.none));
         */
     }
-    mixin SemanticFunctionThanCanAddSymbolsMixin;
-    pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
     {
         foreach (ref argNode; call.arguments)
         {
@@ -189,34 +228,68 @@ class importFunction : SemanticFunctionThanCanAddSymbols
                     scope_.getModule.formatLocation(argNode.syntaxNode.source), call.syntaxNode.functionName, argNode);
                 throw quit;
             }
-            auto import_ = loadImport(symbol);
-            scope_.add(import_.baseID.toString, import_.asTypedValue);
+            auto moduleBaseName = sliceModuleBaseName(symbol);
+            from!"std.stdio".writefln("[DEBUG] import '%s'",moduleBaseName);
+            scope_.addUnevaluatedSymbol(moduleBaseName);
         }
+        return 0;
+    }
+    mixin SemanticFunctionThanCanAddSymbolsMixin;
+    pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    {
+        /+
+        foreach (ref argNode; call.arguments)
+        {
+            auto symbol = tryEvaluateToSymbol(&argNode);
+            assert(symbol, "CodeBug: this should have been checked on pass 1");
+            auto import_ = loadImport(symbol);
+            scope_.evaluated(import_.baseID.toString, import_.asTypedValue);
+        }
+        +/
         return SemanticCallResult(SemanticNode.newVoid(call.syntaxNode.base));
-        //return ResolveResult(TypedValue.void_);
     }
 }
+class importEvaluator : UnevaluatedSymbol
+{
+    SemanticCall* importCall;
+    this(IScope evaluateScope, SemanticCall* importCall)
+    {
+        super(evaluateScope);
+        this.importCall = importCall;
+    }
+    override TypedValue tryEvaluate()
+    {
+        assert(0, "not implemented");
+    }
+}
+
 class setFunction : SemanticFunctionThanCanAddSymbols
 {
     mixin singleton!(No.ctor);
+    private string symbol;
     private this() immutable
     {
         super(SemanticArgType.fullyAnalyzedSemanticNode, [
             immutable NumberedSemanticArgType(SemanticArgType.semiAnalyzedSemanticNode, 1)
         ]);
     }
-    mixin SemanticFunctionThanCanAddSymbolsMixin;
-    pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
     {
         assertFunctionArgCount(scope_, call, 2);
 
-        auto symbol = argAsSymbol(scope_, call, 0);
+        this.symbol = argAsSymbol(scope_, call, 0);
         auto def    = &call.syntaxNode.arguments[1];
         // TODO: if call.arguments[1] is not a typed value, or can't be converted to one,
         //       then I could probably create a new typed value node that wraps the actual value
-        scope_.add(symbol, call.arguments[1].getAnalyzedTypedValue(Yes.resolveSymbols));
+        //scope_.add(symbol, call.arguments[1].getAnalyzedTypedValue(Yes.resolveSymbols));
+        scope_.addUnevaluatedSymbol(symbol);
+        return 0;
+    }
+    mixin SemanticFunctionThanCanAddSymbolsMixin;
+    pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    {
+        scope_.evaluated(this.symbol, call.arguments[1].getAnalyzedTypedValue(Yes.resolveSymbols));
         return SemanticCallResult(SemanticNode.newVoid(call.syntaxNode.base));
-        //return ResolveResult(TypedValue.void_);
     }
 }
 class setBuiltinFunctionFunction : SemanticFunctionThanCanAddSymbols
@@ -226,8 +299,7 @@ class setBuiltinFunctionFunction : SemanticFunctionThanCanAddSymbols
     {
         super(SemanticArgType.semiAnalyzedSemanticNode, null);
     }
-    mixin SemanticFunctionThanCanAddSymbolsMixin;
-    pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
     {
         assertFunctionArgCount(scope_, call, 1);
         auto symbol = &call.syntaxNode.arguments[0];
@@ -237,7 +309,6 @@ class setBuiltinFunctionFunction : SemanticFunctionThanCanAddSymbols
                 scope_.getModule.formatLocation(call.syntaxNode.source), call.syntaxNode.functionName, symbol.type);
             throw quit;
         }
-
         auto function_ = tryGetHiddenBuiltinRuntimeFunction(symbol.source);
         if (function_ is null)
         {
@@ -249,8 +320,12 @@ class setBuiltinFunctionFunction : SemanticFunctionThanCanAddSymbols
         // TODO: verify function_.interface matches the builtin function interface
         //
         scope_.add(symbol.source, BuiltinRuntimeFunctionType.instance.createTypedValue(function_));
+        return 0;
+    }
+    mixin SemanticFunctionThanCanAddSymbolsMixin;
+    pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
+    {
         return SemanticCallResult(SemanticNode.newVoid(call.syntaxNode.base));
-        //return ResolveResult(TypedValue.void_);
     }
 }
 class callFunction : SemanticFunctionThanCanAddSymbols
@@ -259,6 +334,11 @@ class callFunction : SemanticFunctionThanCanAddSymbols
     private this() immutable
     {
         super(SemanticArgType.semiAnalyzedSemanticNode, null);
+    }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        assert(0, "call pass1 not implemented");
+        return 0;
     }
     mixin SemanticFunctionThanCanAddSymbolsMixin;
     pragma(inline) final SemanticCallResult interpretWriteableScope(IScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
@@ -312,7 +392,7 @@ class callFunction : SemanticFunctionThanCanAddSymbols
                     call.syntaxNode,
                     rebindable(RuntimeCallType.instance.createTypedValue(&runtimeCallNode.runtimeCall)),
                     call.arguments[1 .. $],
-                    firstArgTypedValue);
+                    rebindable(firstArgTypedValue));
                 runtimeCallNode.nodeType = SemanticNodeType.runtimeCall;
                 return SemanticCallResult(runtimeCallNode);
             }
@@ -339,6 +419,12 @@ class functionFunction : SemanticFunction
     private this() immutable
     {
         super(SemanticArgType.syntaxNode, null);
+    }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // do nothing for now, maybe we will need to analyze the function body later?
+        // or maybe tha would be done later
+        return 0;
     }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {
@@ -442,7 +528,7 @@ class functionFunction : SemanticFunction
         auto functionFlags = FunctionFlags.none;
 
         auto interface_ = immutable RuntimeFunctionInterface(
-            data.returnType.toImmutable,
+            data.returnType.val.toImmutable,
             parameters, // parameters not implemented
             flagParameters, //flag parameters not implemented
             functionFlags // not implemented
@@ -472,6 +558,12 @@ class jumpBlockFunction : SemanticFunction
     private this() immutable
     {
         super(SemanticArgType.syntaxNode, null);
+    }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        // do nothing for now...
+        return 0;
     }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {
@@ -535,6 +627,12 @@ class jumpLoopIfFunction : SemanticFunction
     {
         super(SemanticArgType.semiAnalyzedSemanticNode, null);
     }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        // do nothing for now...
+        return 0;
+    }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {
         if (call.syntaxNode.arguments.length != 1)
@@ -561,6 +659,12 @@ class foreachFunction : SemanticFunction
     private this() immutable
     {
         super(SemanticArgType.semiAnalyzedSemanticNode, null);
+    }
+    final override uint interpretPass1(IScope scope_, SemanticCall* call)
+    {
+        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        // do nothing for now...
+        return 0;
     }
     final override SemanticCallResult interpret(IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/) const
     {

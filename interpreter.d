@@ -74,7 +74,7 @@ struct Interpreter
         {
         case SemanticNodeType.typedValue:
             import types : VoidType;
-            if (node.typedValue.asTypedValue.type !is VoidType.instance)
+            if (node.typedValue.asTypedValue.type.val !is VoidType.instance)
             {
                 import types; from!"std.stdio".writefln("[DEBUG] typed value %s", node.typedValue.asTypedValue.type.formatName);
                 assert(0, "not implemented: interpreter handle semantc node typed value");

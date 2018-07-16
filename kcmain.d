@@ -1,5 +1,5 @@
 #!/usr/bin/env rund
-//!includePath ../mored
+//!importPath ../mored
 import std.algorithm : canFind;
 import std.typecons : Flag, Yes, No;
 import std.array : Appender;
@@ -110,7 +110,7 @@ int tryMain(string[] args)
     }
     foreach (module_; commandLineModules)
     {
-        module_.analyze();
+        module_.analyzePass2(Yes.runContext);
     }
     //
     // Analyze all used functions
