@@ -10,8 +10,9 @@ import std.stdio;
 
 import more.file : readFile;
 
-import common : QuitException, formatDir;
 static import global;
+
+import common : QuitException, formatDir;
 import log;
 import parser;
 import mod : Module, loadModuleFromFilename;
@@ -108,10 +109,16 @@ int tryMain(string[] args)
     {
         commandLineModules[index] = loadModuleFromFilename(filename, Yes.rootCodeIsUsed, null);
     }
-    foreach (module_; commandLineModules)
     {
-        module_.analyzePass2(Yes.runContext);
+        uint errorCount = 0;
+        foreach (module_; commandLineModules)
+        {
+            errorCount += module_.analyzePass2(Yes.runContext);
+        }
+        if (errorCount > 0)
+            return 1;
     }
+    /+
     //
     // Analyze all used functions
     //
@@ -145,6 +152,7 @@ int tryMain(string[] args)
             return 1;
         }
     }
+    +/
 
     if (action == Action.run)
     {

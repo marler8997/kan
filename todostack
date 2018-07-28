@@ -1,7 +1,7 @@
 I need to differentiate between the ways that symbols are used.
 For example, a symbol reference could just be declaring a return type, in which case we may not need to evaluate it just yet. On the other hand, we may need to use the symbol's evaluated value.
 
-
+Using smaller names for things that are common/unambiguous (i.e. function -> func, boolean -> bool)
 
 
 get examples/jump.kan to work

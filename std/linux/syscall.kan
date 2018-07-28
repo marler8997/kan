@@ -1,0 +1,8 @@
+
+import(linux.file)
+
+// TODO: use extern(linux_syscall_x64)
+set(write function(sword {
+    file.FileD fd
+    ptr(u8) buf
+    uword count}))

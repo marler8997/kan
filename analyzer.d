@@ -3,47 +3,60 @@ module analyzer;
 import std.typecons : Flag, Yes, No;
 import std.format : format;
 
-import common : from, quit;
+import more.alloc : GCDoubler;
+import more.builder : Builder;
+import more.format : StringSink;
+
+import common : from, toUarray, quit;
 import log;
-import syntax : SyntaxNodeType, SyntaxNode, KeywordType;
+import syntax : SyntaxNodeType, SyntaxNode, TupleSyntaxNode, KeywordType;
 import types;
 import semantics;// : peelQualifier, IDotQualifiable, SymbolEntryDirect, SemanticNode, Type;
 import mod : Module;
+import builtin : symbolFunction;
 
-/**
-Used as a template parameter for functions to execute in 2 different modes.
-It executes normaly when using ReportErrors.no, but when it is ReportErrors.yes
-it means semantic analysis has failed and any unresolved analysis should be
-considered errors and reported.
-*/
-enum ReportErrors {no, yes}
-
-alias NotReporting = ReportErrors.no;
-alias Reporting    = ReportErrors.yes;
-
-/**
-Resolves the return type to `T` if reportErrors is false, otherwise, resovles to void
-*/
-template ReportReturn(ReportErrors reportErrors, T)
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// TODO: might add "statementContext" to AnalyzeOptions instead of having a separate
+//       enforceValidStatement function
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+struct AnalyzeOptions
 {
-    static if (reportErrors == ReportErrors.yes)
-        alias ReportReturn = uint;
-    else
-        alias ReportReturn = T;
-}
+    static AnalyzeOptions none()
+    {
+        return AnalyzeOptions(cast(Flags)0);
+    }
+    static AnalyzeOptions makePreventNonFunctionSymbolResolution()
+    {
+        return AnalyzeOptions(Flags.preventNonFunctionSymbolResolution);
+    }
 
-enum AnalyzeState : ubyte
-{
-    notAnalyzed,
-    error,
-    // The node has added any symbols it could add to the containing scope
-    // but it not fully analyzed
-    addedSymbols,
-    analyzed,
-}
-bool greaterThan(AnalyzeState left, AnalyzeState right)
-{
-    return left > right;
+    private enum Flags : ubyte
+    {
+        preventNonFunctionSymbolResolution = 0b0001,
+    }
+    Flags flags;
+
+    bool preventNonFunctionSymbolResolution() const
+    { return (flags & Flags.preventNonFunctionSymbolResolution) != 0; }
+    void enablePreventNonFunctionSymbolResolution()
+    { this.flags |= Flags.preventNonFunctionSymbolResolution; }
+
+    void toString(StringSink sink)
+    {
+        string prefix = "";
+        if (preventNonFunctionSymbolResolution)
+        {
+            sink(prefix);
+            prefix = ",";
+            sink("preventSymbolRes");
+        }
+        if (prefix.length == 0)
+        {
+            sink("none");
+        }
+    }
 }
 
 /*
@@ -55,23 +68,19 @@ resolve (search for the symbol in this scope and any parent scopes)
 unqualified (the symbol has no '.', it is the full symbol)
 qualified (the symbol may or may not have multiple parts)
 */
-
-ResolveResult tryResolveUnqualified(IReadonlyScope scope_, string unqualifiedSymbol)
+SemanticNode tryResolveUnqualified(IReadonlyScope scope_, string unqualifiedSymbol)
 {
     for (;;)
     {
         auto result = scope_.tryGetUnqualified(unqualifiedSymbol);
-        if (result.state != ResolveResultEnum.noEntryAndAllSymbolsAdded)
-        {
+        if (result)
             return result;
-        }
         scope_ = scope_.getParent();
         if (!scope_)
-        {
-            return ResolveResult.noEntryAndAllSymbolsAdded;
-        }
+            return null;
     }
 }
+/+
 // Find the symbol in the current or a parent scope, do not stop search if a scope
 // is unfinished.
 // Returns TypedValue.nullValue if no entry is found
@@ -87,9 +96,10 @@ const(TypedValue) tryResolveUnqualifiedIgnoreUnfinishedScopes(IReadonlyScope sco
             return TypedValue.nullValue;
     }
 }
++/
 
-ReportReturn!(reportErrors, ResolveResult) tryResolveQualified(ReportErrors reportErrors = NotReporting)
-    (IReadonlyScope scope_, string qualifiedSymbol)
+/+
+SemanticNode tryResolveQualified(IReadonlyScope scope_, string qualifiedSymbol)
 {
     verbose(1, "tryResolveQualified '%s'", qualifiedSymbol);
 
@@ -97,288 +107,246 @@ ReportReturn!(reportErrors, ResolveResult) tryResolveQualified(ReportErrors repo
     auto firstPart = peelQualifier(&restOfSymbol);
 
     auto firstPartResult = scope_.tryResolveUnqualified(firstPart);
-    if (firstPartResult.state != ResolveResultEnum.haveEntry)
-    {
-        verbose(1, "tryResolveQualified '%s' > %s", qualifiedSymbol, firstPartResult.state);
-        static if (reportErrors)
-        {
-            if (firstPartResult.state == ResolveResultEnum.noEntryButMoreSymbolsCouldBeAdded)
-            {
-                // We may not want to print an error here because if more symbols could be added
-                // then there should be an error somewhere else
+    if (!firstPartResult || restOfSymbol is null)
+        return firstPartResult;
 
-                // check if any parent scopes have the symbol for better analytics
-                auto found = scope_.tryResolveUnqualifiedIgnoreUnfinishedScopes(firstPart);
-                if (found.isNull)
-                {
-                    from!"std.stdio".writefln("%sError: undefined symbol '%s'",
-                        scope_.getModule().formatLocation(firstPart), firstPart);
-                }
-                else
-                {
-                    from!"std.stdio".writefln("%sError: symbol '%s' was found in a parent scope, but inner scope(s) were unfinished",
-                        scope_.getModule().formatLocation(firstPart), firstPart);
-                }
-            }
-            else
-            {
-                from!"std.stdio".writefln("%sError: undefined symbol '%s'",
-                    scope_.getModule().formatLocation(firstPart), firstPart);
-            }
-            return 1;
-        }
-        else
-            return firstPartResult;
-    }
-    if (restOfSymbol is null)
-    {
-        verbose(1, "tryResolveQualified '%s' > haveEntry", qualifiedSymbol);
-        static if (reportErrors)
-            return 0; // no error
-        else
-            return firstPartResult;
-    }
-
-    auto firstPartQualifiable = firstPartResult.entry.tryAsIDotQualifiable();
+    auto firstPartQualifiable = firstPartResult.tryAsIDotQualifiable();
     if (firstPartQualifiable is null)
     {
-        from!"std.stdio".writefln("%sError: cannot access member '%s' from an object of type %s, it doesn't have any dotted members",
-            scope_.getModule().formatLocation(restOfSymbol), restOfSymbol, firstPartResult.entry.type.formatName);
+        /+
+        from!"std.stdio".writefln("%sError: cannot access member '%s' from an object of type ?, it doesn't have any dotted members",
+            location, restOfSymbol/*, firstPartResult.entry.type.formatName*/);
         throw quit;
+        +/
+        return null;
     }
 
     // TODO: maybe add reportErrors to tryGetQualified
     auto secondResult = tryGetQualified(cast()firstPartQualifiable, restOfSymbol);
-    verbose(1, "tryResolveQualified '%s' > %s", qualifiedSymbol, secondResult.state);
-    static if (!reportErrors)
-        return secondResult;
-    else
-    {
-        if (secondResult.state == ResolveResultEnum.haveEntry)
-            return 0; // no error
-        if (secondResult.state == ResolveResultEnum.noEntryButMoreSymbolsCouldBeAdded)
-        {
-            // We probably don't print an error here because if more symbols could be added
-            // then there should be an error somewhere else
-        }
-        else
-        {
-            from!"std.stdio".writefln("Error: scope '%s' does not contain the qualified symbol '%s'",
-                firstPartQualifiable, restOfSymbol);
-        }
-        return 1;
-    }
+    //verbose(1, "tryResolveQualified '%s' > %s", qualifiedSymbol, secondResult.state);
+    return secondResult;
 }
-alias tryResolveQualifiedSymbol = tryResolveQualified;
++/
 
-ReportReturn!(reportErrors, void) analyzeRuntimeCall(ReportErrors reportErrors = NotReporting)
-    (IReadonlyScope scope_, RuntimeCall* call/*, Flag!"used" used*/)
+uint analyzeParamPass2(const(SyntaxNode)* paramSyntax, SemanticNode* param)
 {
-    enum CodeBugInvalidStateMessage = "code bug: this function should not be called in this state";
-    static if (!reportErrors)
-    {
-        static string changeAndGotoRuntimeCallAnalyzeState(RuntimeCallAnalyzeState state)
-        {
-            auto stateString = from!"std.conv".to!string(state);
-            return `
-                {
-                    static assert(!RuntimeCallAnalyzeState.` ~ stateString ~ `.isDone, "code bug: ` ~ stateString ~ `");
-                    call.analyzeState = RuntimeCallAnalyzeState.` ~ stateString ~ `;
-                    goto case RuntimeCallAnalyzeState.` ~ stateString ~ `;
-                }
-        `;
-        }
-        static string setDoneAnalyzeStateAndReturn(RuntimeCallAnalyzeState state)
-        {
-            auto stateString = from!"std.conv".to!string(state);
-            return `
-                {
-                    static assert(RuntimeCallAnalyzeState.` ~ stateString ~ `.isDone, "code bug: ` ~ stateString ~ `");
-                    call.analyzeState = RuntimeCallAnalyzeState.` ~ stateString ~ `;
-                    return;
-                }
-        `;
-        }
+    return errorfUint(formatLocation(paramSyntax.source.ptr), "analyzeParam not implemented");
+}
 
-        enum finishAndReturnIfCurrentValueIsFunction = q{
-            {
-                auto asRuntimeFunctionType = cast(RuntimeFunctionType)call.currentFunctionValue.type;
-                if (asRuntimeFunctionType)
-                {
-                    call.function_ = cast()asRuntimeFunctionType.get(call.currentFunctionValue.value);
-                    call.function_.addUsedCall(call);
-                    mixin(setDoneAnalyzeStateAndReturn(RuntimeCallAnalyzeState.done));
-                }
-            }
-        };
-    }
+uint analyzeUserDefinedFunctionPass2(UserDefinedFunction func)
+{
+    //
+    // Analyze function modifiers
+    //
+        /+
 
-    final switch(call.analyzeState)
-    {
-    case RuntimeCallAnalyzeState.analyzeArguments:
-        enum analyzeArgumentValueCode = q{
-            analyzeValue!reportErrors(scope_, &call.arguments[call.analyzeArgumentsIndex], Yes.resolveSymbols/*, used*/)
-        };
-        static if (reportErrors)
-        {
-            //from!"std.stdio".writefln("[DEBUG] ReportErrors: analyzeRuntimeCall argument %s not analyzed", call.analyzeArgumentsIndex);
-            assert(call.analyzeArgumentsIndex < call.arguments.length, "code bug");
-            auto result = mixin(analyzeArgumentValueCode);
-            assert(result, "code bug: runtime argument could not be analyzed but did not report any errors");
-            return result;
-        }
-        else
-        {
-            //from!"std.stdio".writefln("[DEBUG] analyzeRuntimeCall.runtimeCall analyzeArguments...", call.syntaxNode.functionName);
-            // analyze arguments
-            for (; call.analyzeArgumentsIndex < call.arguments.length;
-                call.analyzeArgumentsIndex++)
-            {
-                if (!mixin(analyzeArgumentValueCode))
+                auto typedValue = data.nodes[data.analyzeIndex].getAnalyzedTypedValue(Yes.resolveSymbols);
+                auto asFlagType = cast(FlagType)typedValue.type;
+                if (!asFlagType)
                 {
-                    return; // not analyzed because call.analyzeState is not done
+                    data.returnTypeIndex = data.analyzeIndex;
+                    data.analyzeIndex++;
+                    data.returnType = rebindable(convertReturnType(typedValue));
+                    break;
                 }
-            }
-            if (false/*!used*/)
-            {
-                mixin(setDoneAnalyzeStateAndReturn(RuntimeCallAnalyzeState.done));
-            }
-            // There are cases where the function is already resolved (i.e. call(function(...))))
-            if (!call.currentFunctionValue.isNull)
-            {
-                mixin(changeAndGotoRuntimeCallAnalyzeState(RuntimeCallAnalyzeState.analyzeFunctionValue));
-            }
-            mixin(changeAndGotoRuntimeCallAnalyzeState(RuntimeCallAnalyzeState.resolveFunctionSymbol));
-        }
-    case RuntimeCallAnalyzeState.resolveFunctionSymbol:
-        //assert(used);
-        from!"std.stdio".writefln("[DEBUG] resolving function '%s'", call.syntaxNode.functionName);
-        // !!!!!!!!!!!
-        auto symbolResult = tryResolveQualified!reportErrors(scope_, call.syntaxNode.functionName);
-        static if (reportErrors)
-        {
-            //from!"std.stdio".writefln("[DEBUG] ReportErrors: tryResolveQualified '%s' result = %s", call.syntaxNode.functionName, symbolResult);
-            return symbolResult;
-        }
-        else
-        {
-            //from!"std.stdio".writefln("[DEBUG] analyzeRuntimeCall.runtimeCall resolveFunctionSymbol...", call.syntaxNode.functionName);
-            if (symbolResult.state != ResolveResultEnum.haveEntry)
-            {
-                if (symbolResult.state == ResolveResultEnum.noEntryAndAllSymbolsAdded)
+
+                auto flagName = asFlagType.get(typedValue.value);
+                if (flagName == "externC")
+                    data.externC = true;
+                else if (flagName == "builtin")
+                    data.builtin = true;
+                else
                 {
-                    from!"std.stdio".writefln("Error: could not resolve function '%s'", call.syntaxNode.functionName);
+                    from!"std.stdio".writefln("Error: unknown function flag(%s)", flagName);
                     throw quit;
                 }
-                verbose(1, "could not resolve function '%s' yet", call.syntaxNode.functionName);
-                return; // not analyzed because call.analyzeState is not done
             }
-            call.currentFunctionValue = symbolResult.entry;
 
-            mixin(finishAndReturnIfCurrentValueIsFunction);
-            mixin(changeAndGotoRuntimeCallAnalyzeState(RuntimeCallAnalyzeState.analyzeFunctionValue));
-        }
-    case RuntimeCallAnalyzeState.analyzeFunctionValue:
-        static if (reportErrors)
+        +/
+    uint argOffset = 0;
+    for (;; argOffset++)
+    {
+        if (argOffset >= func.defNodes.length)
+            return errorfUint(func.formatLocation(), "function is missing returnType and parameters");
+        // Check for certain function flags
+        break;
+    }
+
+    //
+    // Analyze returnType/parameters
+    //
+    func.returnType = newSemanticNode(&func.defNodes[argOffset++]);
+    if (argOffset >= func.defNodes.length)
+        return errorfUint(func.formatLocation(), "function is missing parameters");
+    const(TupleSyntaxNode)* paramTuple;
+    {
+        auto paramSyntaxNode = func.defNodes[argOffset++];
+        if (paramSyntaxNode.type != SyntaxNodeType.tuple)
+            return errorfUint(func.formatLocation(), "expected a parameter tuple but got '%s'", paramSyntaxNode.type);
+        paramTuple = &paramSyntaxNode.tuple;
+    }
+
+    {
+        auto errorCount = analyzeExpressionPass2(func.containingScope, &func.returnType, AnalyzeOptions.none);
+        if (errorCount > 0)
+            return errorCount;
+    }
+    // TODO: make sure that returnType is a type
+    from!"std.stdio".writefln("WARNING: check that the function return type is actually a type");
+    /+
+        auto asTypeType = cast(TypeType)typedValue.type;
+        if (!asTypeType)
         {
-            assert("not implemented or invalid code path");
+            from!"std.stdio".writefln("Error: expected a return type but got %s", typedValue.type.formatName);
+            throw quit;
         }
-        else
+    +/
+    {
+        auto paramTupleSemanticNodes = newSemanticNodes(paramTuple.nodes);
         {
-            //from!"std.stdio".writefln("[DEBUG] analyzeRuntimeCall.runtimeCall analyzeFunctionValue...", call.syntaxNode.functionName);
+            uint errorCount = 0;
+            foreach (node; paramTupleSemanticNodes)
+            {
+                errorCount += analyzeExpressionPass1(func, node);
+            }
+            if (errorCount > 0)
+                return errorCount;
+        }
+
+        auto maxParams = paramTuple.nodes.length / 2; // every parameter needs at least a name/type
+        auto paramBuffer = new FunctionParameter[paramTuple.nodes.length / 2];
+        uint paramCount = 0;
+        for (size_t tupleIndex = 0; ;)
+        {
+            if (tupleIndex >= paramTuple.nodes.length)
+                break;
+
+            SemanticNode type;
             for (;;)
             {
-                //auto result = tryAnalyzeReturnValue(scope_, call.currentFunctionValue);
-                //if (!result.analyzed)
-                //{
-                //    return; // not analyzed because call.analyzeState is not done
-                //}
-                mixin(finishAndReturnIfCurrentValueIsFunction);
-                from!"std.stdio".writefln("Error: symbol '%s' is not a function, it's type is %s",
-                    call.syntaxNode.functionName, call.currentFunctionValue.type.formatName);
-                throw quit;
+                auto node = paramTupleSemanticNodes[tupleIndex++];
+                {
+                    auto errorCount = analyzeExpressionPass2(func, &node, AnalyzeOptions.none);
+                    if (errorCount > 0)
+                        return errorCount;
+                }
+                // TODO: check if it is some type of modifier
+                if (type is null)
+                {
+                    // TODO: check that it is actually a type
+                    type = node;
+                    break;
+                }
             }
+            if (tupleIndex >= paramTuple.nodes.length)
+                return errorfUint(paramTuple.base.formatLocation, "last param type is missing a name");
+
+            auto nameNode = paramTupleSemanticNodes[tupleIndex++];
+            auto result = tryAnalyzeToSymbolPass1(nameNode);
+            if (!result.value)
+                return errorfUint(nameNode.formatLocation, "expected symbol but got '%s'", nameNode);
+            auto param = new FunctionParameter(nameNode.getSyntaxNode, func, paramCount, result.value.value, type);
+            paramBuffer[paramCount++] = param;
+            func.add(result.value.value, param);
         }
-        assert(0);
-    case RuntimeCallAnalyzeState.done:
-        assert(0, CodeBugInvalidStateMessage);
+        func.params = paramBuffer[0 .. paramCount].toUarray;
     }
+
+    //
+    // Analyze function body
+    //
+    if (argOffset < func.defNodes.length)
+    {
+        const(TupleSyntaxNode)* bodyTuple;
+        {
+            auto bodySyntaxNode = func.defNodes[argOffset++];
+            if (argOffset != func.defNodes.length)
+                return errorfUint(formatLocation(&func.defNodes[argOffset]),
+                    "too many arguments to 'function'");
+            if (bodySyntaxNode.type != SyntaxNodeType.tuple)
+                return errorfUint(func.formatLocation(), "expected body of function to be a tuple but got '%s'", bodySyntaxNode.type);
+            bodyTuple = &bodySyntaxNode.tuple;
+        }
+
+        func.bodyNodes = newSemanticNodes(bodyTuple.nodes);
+        {
+            uint errorCount = 0;
+            foreach (node; func.bodyNodes)
+            {
+                errorCount += analyzeExpressionPass1(func, node);
+            }
+            if (errorCount > 0)
+                return errorCount;
+        }
+        {
+            uint totalErrorCount = 0;
+            foreach (i; 0 .. func.bodyNodes.length)
+            {
+                auto lastErrorCount = analyzeExpressionPass2(func, &func.bodyNodes[i], AnalyzeOptions.none);
+                if (lastErrorCount == 0)
+                    totalErrorCount += analyzer.enforceValidStatement(func, func.bodyNodes[i]);
+                else
+                    totalErrorCount += lastErrorCount;
+            }
+            if (totalErrorCount > 0)
+                return totalErrorCount;
+        }
+    }
+    return 0;
 }
 
-uint analyzeRuntimeCallPass1(IScope scope_, RuntimeCall* call)
+uint analyzeRegularCallPass1(IScope scope_, RegularCall call)
 {
+    verbose(2, "analyzeRegularCallPass1 '%s'", call.formatLocation);
     uint errorCount = 0;
-    foreach (ref arg; call.arguments)
+    foreach (arg; call.arguments)
     {
-        errorCount += analyzeValuePass1(scope_, &arg);
+        errorCount += analyzeExpressionPass1(scope_, arg);
     }
     return errorCount;
 }
 
-// Note: after a successful call, make sure to analyze the returnValue (call.returnValue)
-private ReportReturn!(reportErrors, AnalyzeState) analyzeSemanticCall(ReportErrors reportErrors = NotReporting)
-    (IReadonlyScope scope_, SemanticCall* call/*, Flag!"used" used*/)
+uint analyzeRegularCallPass2(IReadonlyScope scope_, RegularCall call, AnalyzeOptions analyzeOptions)
 {
-    auto argumentNodesToAnalyzeCount = call.function_.semanticNodeAnalyzeCountFor(call.syntaxNode.arguments.length);
-    if (call.analyzeArgumentsIndex < argumentNodesToAnalyzeCount)
+    verbose(2, "analyzeRegularCallPass2 '%s' analyzeOptions=%s", call.formatLocation, analyzeOptions);
     {
-        bool argumentCouldAddSymbols = false;
-        for (; call.analyzeArgumentsIndex < call.arguments.length; call.analyzeArgumentsIndex++)
+        uint errorCount = 0;
+        foreach (i; 0 .. call.arguments.length)
         {
-            auto result = analyzeValue!reportErrors(scope_, &call.arguments[call.analyzeArgumentsIndex], No.resolveSymbols/*, used*/);
-            static if (reportErrors)
-            {
-                assert(result != 0, "code bug");
-                return result;
-            }
-            else
-            {
-                // TODO: check if the argument could add symbols
-                if (!result)
-                {
-                    // TODO: this can make the logic for configurable by replacing
-                    //     call.function_.canAddSymbols
-                    //WITH
-                    //     call.function_.checkCallCanAddSymbols(call)
-                    return (argumentCouldAddSymbols || call.function_.canAddSymbols) ?
-                        AnalyzeState.notAnalyzed : AnalyzeState.addedSymbols;
-                }
-            }
+            errorCount += analyzeExpressionPass2(scope_, &call.arguments[i], analyzeOptions);
         }
+        if (errorCount > 0)
+            return errorCount;
     }
 
-    if (call.returnValue is null)
+    if (!call.function_)
     {
-        auto result = call.function_.interpret(scope_, call/*, used*/);
-        final switch(result.state)
+        assert(call.functionNameToResolve, "codebug");
+        verbose(5, "resolving function '%s'", call.functionNameToResolve);
+        auto result = analyzeSymbolExpressionPass2(scope_, call.functionNameToResolve, &call.formatLocation, analyzeOptions);
+        if (result.errorCount > 0)
+            return result.errorCount;
+
+        call.function_ = result.value.tryAs!RegularFunction;
+        if (!call.function_)
         {
-        case ResolveResultEnum.haveEntry:
-            call.returnValue = result.entry;
-            break;
-        case ResolveResultEnum.noEntryAndAllSymbolsAdded:
-            from!"std.stdio".writefln("Error: analyze-time-semantic function '%s' is referencing undefined symbol(s)",
-                call.syntaxNode.functionName);
-            throw quit;
-        case ResolveResultEnum.noEntryButMoreSymbolsCouldBeAdded:
-            // TODO: this can make the logic for configurable by replacing
-            //     call.function_.canAddSymbols
-            //WITH
-            //     call.function_.checkCallCanAddSymbols(call)
-            return call.function_.canAddSymbols ? AnalyzeState.notAnalyzed : AnalyzeState.addedSymbols;
+            from!"std.stdio".writefln("Error: symbol '%s' is not a function", call.functionNameToResolve);
+            return 1;
         }
     }
-    static if (reportErrors)
-        return 0; // no error
-    else
-        return AnalyzeState.analyzed;
+    if (call.function_.addAndCheckCall(call).failed)
+        return 1; // error
+
+    return 0;
 }
 
-uint analyzeSemanticCallPass1(IScope scope_, SemanticCall* call)
+uint analyzeSemanticCallPass1(IScope scope_, SemanticCall call)
 {
+    verbose(2, "analyzeSemanticCallPass1 '%s'", call.formatNameForMessage);
     uint errorCount = 0;
-    foreach (ref arg; call.arguments)
+    foreach (arg; call.semanticArgs)
     {
-        errorCount += analyzeValuePass1(scope_, &arg);
+        errorCount += analyzeExpressionPass1(scope_, arg);
     }
     if (errorCount == 0)
     {
@@ -387,352 +355,206 @@ uint analyzeSemanticCallPass1(IScope scope_, SemanticCall* call)
     return errorCount;
 }
 
-// A special "pre-analysis" of a function argument, does not
-// perform variable resolution since the actual call may take raw symbols.
-ReportReturn!(reportErrors, Flag!"analyzed") analyzeValue(ReportErrors reportErrors = NotReporting)
-    (IReadonlyScope scope_, SemanticNode* semanticNode, Flag!"resolveSymbols" resolveSymbols/*, Flag!"used" used*/)
+private NodeResult analyzeSemanticCallPass2(IReadonlyScope scope_, SemanticCall call, AnalyzeOptions analyzeOptions)
 {
-    final switch(semanticNode.nodeType)
+    verbose(4, "analyzeSemanticCallPass2 %s", call.formatNameForMessage);
+    const argumentNodesToAnalyzeCount = call.function_.semanticNodeAnalyzeCountFor(call.syntaxArgs.length);
+    if (call.function_.defaultArgType == SemanticArgType.semiAnalyzedSemanticNode)
     {
-    case SemanticNodeType.typedValue:
-        static if (reportErrors)
-            return 0; // no error
-        else
-            return Yes.analyzed; // do nothing for now
-    case SemanticNodeType.tuple:
-        static if (reportErrors)
-            return analyzeValue!Reporting(scope_, &semanticNode.tuple.elements[semanticNode.tuple.analyzeElementsIndex], resolveSymbols/*, used*/);
-        else
+        analyzeOptions.enablePreventNonFunctionSymbolResolution();
+    }
+    {
+        uint errorCount = 0;
+        foreach (i; 0 .. argumentNodesToAnalyzeCount)
         {
-            // analyze arguments
-            for (; semanticNode.tuple.analyzeElementsIndex < semanticNode.tuple.elements.length;
-                semanticNode.tuple.analyzeElementsIndex++)
-            {
-                if (!analyzeValue(scope_, &semanticNode.tuple.elements[semanticNode.tuple.analyzeElementsIndex], resolveSymbols/*, used*/))
-                {
-                    return No.analyzed;
-                }
-            }
-            return Yes.analyzed;
+            errorCount += analyzeExpressionPass2(scope_, &call.semanticArgs[i], analyzeOptions);
         }
-    case SemanticNodeType.symbol:
+        if (errorCount > 0)
+            return NodeResult(errorCount);
+    }
 
-        if (!resolveSymbols)
+    return call.function_.interpretPass2(scope_, call/*, analyzeOptions*/);
+}
+
+NodeResult analyzeSymbolExpressionPass2(IReadonlyScope scope_, string symbol,
+    scope LocationFormatter delegate() locationFormatter, AnalyzeOptions analyzeOptions)
+{
+    verbose(1, "analyzeSymbol '%s'", symbol);
+
+    auto restOfSymbol = symbol;
+    auto firstPart = peelQualifier(&restOfSymbol);
+
+    auto resultNode = scope_.tryResolveUnqualified(firstPart);
+    if (!resultNode)
+        return errorfNodeResult(locationFormatter(), "undefined symbol '%s'", firstPart);
+
+    for(;;)
+    {
         {
-            static if (reportErrors)
-                return 0;
-            else
-                return Yes.analyzed;
+            auto errorCount = analyzeExpressionPass2(scope_, &resultNode, analyzeOptions);
+            if (errorCount)
+                return NodeResult(errorCount);
         }
-        {
-            auto symbol = semanticNode.symbol.symbolString;
-            auto result = tryResolveQualifiedSymbol!reportErrors(scope_, symbol);
-            static if (reportErrors)
-            {
-                return result;
-            }
-            else
-            {
-                final switch(result.state)
-                {
-                case ResolveResultEnum.haveEntry:
-                    semanticNode.symbol.resolved = result.entry;
-                    return Yes.analyzed;
-                case ResolveResultEnum.noEntryAndAllSymbolsAdded:
-                    from!"std.stdio".writefln("Error: undefined symbol '%s'", symbol);
-                    throw quit;
-                case ResolveResultEnum.noEntryButMoreSymbolsCouldBeAdded:
-                    return No.analyzed;
-                }
-            }
-        }
-    case SemanticNodeType.semanticCall:
-        {
-            auto result = analyzeSemanticCall!reportErrors(scope_, &semanticNode.semanticCall/*, used*/);
-            static if (reportErrors)
-            {
-                if (result)
-                    return result;
-            }
-            else
-            {
-                if (result != AnalyzeState.analyzed)
-                    return No.analyzed;
-            }
-            return analyzeValue!reportErrors(scope_, semanticNode.semanticCall.returnValue, resolveSymbols/*, used*/);
-        }
-    case SemanticNodeType.runtimeCall:
-        enum analyzeCallCode = q{
-            analyzeRuntimeCall!reportErrors(scope_, &semanticNode.runtimeCall/*, used*/)
-        };
-        static if (reportErrors)
-        {
-            return mixin(analyzeCallCode);
-        }
-        else
-        {
-            mixin(analyzeCallCode ~ ";");
-            if (semanticNode.runtimeCall.analyzeState.isDone)
-            {
-                return Yes.analyzed;
-            }
-            return No.analyzed;
-        }
-    case SemanticNodeType.statementBlock:
-        assert(0, "analyzeValue statementBlock not implemented");
-    case SemanticNodeType.jump:
-        assert(0, "analyzeValue jump not implemented");
+        if (restOfSymbol is null)
+            return NodeResult(resultNode);
+        auto nextId = peelQualifier(&restOfSymbol);
+        auto nextNode = resultNode.tryGetUnqualified(nextId);
+        if (!nextNode)
+            return errorfNodeResult(locationFormatter(),  "%s does not have a member named '%s'",
+                resultNode.formatScopeDescription, nextId);
+        resultNode = nextNode;
     }
 }
 
-uint analyzeValuePass1(IScope scope_, SemanticNode* semanticNode)
+uint analyzeExpressionPass1(IScope scope_, SemanticNode semanticNode)
 {
-    final switch(semanticNode.nodeType)
+    static class Visitor : IHighLevelVisitor
     {
-    case SemanticNodeType.typedValue:
-        return 0; // typed values probably won't affect pass1
-    case SemanticNodeType.tuple:
-        assert(0, "analyzeStatementNode for tuples not implemented");
-    case SemanticNodeType.symbol:
-        return 0; // symbols alone probably won't affect pass1
-    case SemanticNodeType.semanticCall:
-        return analyzeSemanticCallPass1(scope_, &semanticNode.semanticCall);
-    case SemanticNodeType.runtimeCall:
-        return analyzeRuntimeCallPass1(scope_, &semanticNode.runtimeCall);
-    case SemanticNodeType.statementBlock:
+        IScope scope_;
+        uint errorCount;
+        this(IScope scope_) { this.scope_ = scope_; }
+        void visit(Tuple node)
         {
-            uint errorCount = 0;
-            foreach (ref statement; semanticNode.statementBlock.statements)
+            // TODO: does the tuple have it's own scope?
+            foreach (part; node.nodes)
             {
-                errorCount += analyzeStatementNodePass1(semanticNode.statementBlock.scope_, &statement);
+                // !!!! TODO: the tuple may have it's own scope!
+                errorCount += analyzeExpressionPass1(scope_, part);
             }
-            return errorCount;
         }
-    case SemanticNodeType.jump:
-        return 0; // ignore jumps in pass 1 for now
+        //void visit(Void node) { }
+        void visit(Symbol node) { }
+        void visit(RegularCall node) { errorCount = analyzeRegularCallPass1(scope_, node); }
+        void visit(SemanticCall node) { errorCount = analyzeSemanticCallPass1(scope_, node); }
+        void visit(BuiltinType node) { }
+        void visit(SemanticFunction node) { }
+        void visit(RegularFunction node) { }
+        void visit(Value node) { }
+        void visit(FunctionParameter node) { assert(0, "codebug, should be no FunctionParameter on pass1"); }
+        void visit(LazyNode node) { assert(0, "codebug, should be no LazyNodes on pass1"); }
+    }
+    scope visitor = new Visitor(scope_);
+    semanticNode.accept(visitor);
+    return visitor.errorCount;
+}
+
+uint analyzeExpressionPass2(IReadonlyScope scope_, SemanticNode* semanticNodeRef, AnalyzeOptions analyzeOptions)
+{
+    verbose(3, "analyzeExpression %s, analyzeOptions=%s", (*semanticNodeRef), analyzeOptions);
+    static class Visitor : HighLevelVisitorNotImplementedByDefault
+    {
+        IReadonlyScope scope_;
+        AnalyzeOptions analyzeOptions;
+        OptionalNodeResult visitResult;
+        this(IReadonlyScope scope_, AnalyzeOptions analyzeOptions)
+        { this.scope_ = scope_; this.analyzeOptions = analyzeOptions; }
+        //final override void visit(Void node) { }
+        final override void visit(Symbol node)
+        {
+            verbose(0, "[DEBUG] symbol '%s' analyzeOptions=%s", node.value, analyzeOptions);
+            if (analyzeOptions.preventNonFunctionSymbolResolution)
+                verbose(2, "preventing symbol '%s' resolution", node.value);
+            else
+                this.visitResult = analyzeSymbolExpressionPass2(scope_, node.value, &node.formatLocation, analyzeOptions);
+        }
+        final override void visit(RegularCall node)
+        {
+            visitResult = OptionalNodeResult(analyzeRegularCallPass2(scope_, node, analyzeOptions));
+        }
+        final override void visit(SemanticCall node)
+        {
+            visitResult = analyzeSemanticCallPass2(scope_, node, analyzeOptions);
+            assert(visitResult.value || visitResult.errorCount > 0, "codebug, analyzeSemantic call must return a node or errors");
+        }
+        final override void visit(BuiltinType node) { }
+        final override void visit(RegularFunction node) { }
+        final override void visit(Value node) { }
+        //final override void visit(FunctionParameter node) { }
+        final override void visit(LazyNode node) { this.visitResult = node.tryEvaluate(); }
+    }
+    for (;;)
+    {
+        scope visitor = new Visitor(scope_, analyzeOptions);
+        verbose(4, "analyzeExpression %s", (*semanticNodeRef));
+        (*semanticNodeRef).accept(visitor);
+        if (visitor.visitResult.errorCount > 0 || visitor.visitResult.value is null)
+            return visitor.visitResult.errorCount;
+        *semanticNodeRef = visitor.visitResult.value;
     }
 }
 
-// Analyze a semantic node as a "statement".  This differs from analyzeValue which would typically
-// be analyzing a node for its return value for something like a function argument.  This
-// funcion analyzes a node to perform some operation.
-ReportReturn!(reportErrors, AnalyzeState) analyzeStatementNode(ReportErrors reportErrors = NotReporting)
-    (IScope scope_, SemanticNode* semanticNode)
+uint enforceValidStatement(IReadonlyScope scope_, SemanticNode semanticNode)
 {
-    final switch(semanticNode.nodeType)
+    static class Visitor : HighLevelVisitorNotImplementedByDefault
     {
-    case SemanticNodeType.typedValue:
-        static if (reportErrors)
-            assert(0, "code bug");
-        else
+        IReadonlyScope scope_;
+        uint errorCount;
+        this(IReadonlyScope scope_) { this.scope_ = scope_; }
+        //final override void visit(Symbol node) { /* probably ignore on pass 1*/ }
+        final override void visit(RegularCall node)
         {
-            // TODO: throw semantic error if this node doesn't "do anything", i.e.
-            //       if it's just a number or string or other kind of value function
-            if (!semanticNode.typedValue.asTypedValue.isVoid)
-            {
-                from!"std.stdio".writefln("Error: return value of '%s' is ignored", *semanticNode);
-                throw quit;
-            }
-            return AnalyzeState.analyzed;
-        }
-    case SemanticNodeType.tuple:
-        assert(0, "analyzeStatementNode for tuples not implemented");
-    case SemanticNodeType.symbol:
-        from!"std.stdio".writefln("Error: lone symbol '%s' is not a valid statement", semanticNode.syntaxNode.source);
-        throw quit;
-    case SemanticNodeType.semanticCall:
-        {
-            auto analyzeState = analyzeSemanticCall!reportErrors(scope_, &semanticNode.semanticCall/*, module_.rootCodeIsUsed ? Yes.used : No.used*/);
-            if (analyzeState == AnalyzeState.analyzed)
-            {
-                return analyzeStatementNode!reportErrors(scope_, semanticNode.semanticCall.returnValue);
-            }
-            return analyzeState;
+            assert(node.function_, "codebug");
+            // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            // TODO: UNCOMMENT THIS
+            // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
             /+
-        static if (reportErrors)
-        {{
-
-            //from!"std.stdio".writefln("function '%s'", semanticNode.semanticCall.syntaxNode.functionName);
-            assert(0, format("analyzeStatementNode!Reporting for semanticCall '%s' not implemented", semanticNode.semanticCall.syntaxNode.functionName));
-        }}
-        else
-        {{
-            auto analyzeState = analyzeSemanticCall(scope_, &semanticNode.semanticCall/*, module_.rootCodeIsUsed ? Yes.used : No.used*/);
-            if (analyzeState == AnalyzeState.analyzed)
+            if (!node.function_.interface_.returnType.canBeIgnoredAsReturnValue)
             {
-                return analyzeStatementNode(scope_, semanticNode.semanticCall.returnValue);
+                from!"std.stdio".writefln("%sError: function return value of type %s is being ignored",
+                    node.function_.formatLocation(), node.function_.interface_.returnType.formatName);
+                errorCount = 1;
             }
-            return analyzeState;
-        }}
-        +/
+            +/
         }
-    case SemanticNodeType.runtimeCall:
+        final override void visit(SemanticCall node)
         {
-            enum analyzeCallCode = q{
-                analyzeRuntimeCall!reportErrors(scope_, &semanticNode.runtimeCall/*, module_.rootCodeIsUsed ? Yes.used : No.used*/)
-            };
-            static if (reportErrors)
-            {
-                return mixin(analyzeCallCode);
-            }
-            else
-            {
-                mixin(analyzeCallCode ~ ";");
-                if (semanticNode.runtimeCall.analyzeState.isDone)
-                {
-                    return AnalyzeState.analyzed;
-                }
-                return AnalyzeState.addedSymbols; // runtime functions DO NOT add symbols
-            }
+            assert(0, "codebug? Shouldn't the semantic call have been replaced?");
         }
-    case SemanticNodeType.statementBlock:
-        static if (reportErrors)
+        //final override void visit(BuiltinType node) { /* probably ignore on pass 1*/ }
+        //final override void visit(RegularFunction node) { /* probably ignore on pass 1*/ }
+        final override void visit(Value node)
         {
-            return analyzeStatementNode!reportErrors(semanticNode.statementBlock.scope_,
-                &semanticNode.statementBlock.statements[semanticNode.statementBlock.analyzeStatementsIndex]);
-        }
-        else
-        {
-            for (; semanticNode.statementBlock.analyzeStatementsIndex < semanticNode.statementBlock.statements.length;
-                semanticNode.statementBlock.analyzeStatementsIndex++)
-            {
-                auto result = analyzeStatementNode(semanticNode.statementBlock.scope_,
-                    &semanticNode.statementBlock.statements[semanticNode.statementBlock.analyzeStatementsIndex]);
-                if (result != AnalyzeState.analyzed)
-                {
-                    return result;
-                }
-            }
-            return AnalyzeState.analyzed;
-        }
-    case SemanticNodeType.jump:
-        if (null is scope_.tryGetJumpBlock())
-        {
-            from!"std.stdio".writefln("%sError: jumps must be inside jump blocks",
-                scope_.getModule().formatLocation(semanticNode.syntaxNode.source));
-            return AnalyzeState.error;
-        }
-        static if (reportErrors)
-        {
-            return analyzeStatementNode!reportErrors(scope_, semanticNode.jump.condition);
-        }
-        else
-        {
-            auto result = analyzeStatementNode!reportErrors(scope_, semanticNode.jump.condition);
-            if (result == AnalyzeState.analyzed)
-            {
-                auto condition = semanticNode.jump.condition.getAnalyzedTypedValue(Yes.resolveSymbols);
-                auto asConditionalType = cast(IConditionalType)condition.type;
-                if (asConditionalType is null)
-                {
-                    from!"std.stdio".writefln("%sError: jumps require conditional value but got %s",
-                        scope_.getModule().formatLocation(semanticNode.syntaxNode.source), condition.type.formatName);
-                    return AnalyzeState.error;
-                }
-            }
-            return result;
+            auto type = node.getType();
+            if (cast(IIgnorable)type is null)
+                errorCount = errorfUint(node.formatLocation,
+                    "value of type '%s' is currently being ignored, but it isn't ignorable", type.formatName);
         }
     }
+    scope visitor = new Visitor(scope_);
+    semanticNode.accept(visitor);
+    return visitor.errorCount;
 }
 
-// Analyze a semantic node as a "statement".  This differs from analyzeValue which would typically
-// be analyzing a node for its return value for something like a function argument.  This
-// funcion analyzes a node to perform some operation.
-uint analyzeStatementNodePass1(IScope scope_, SemanticNode* semanticNode)
+ResultOrError!Symbol tryAnalyzeToSymbolPass1(SemanticNode node)
 {
-    final switch(semanticNode.nodeType)
+    static class Visitor : HighLevelVisitorIgnoreByDefault
     {
-    case SemanticNodeType.typedValue:
-        return 0; // typed values probably won't affect pass1
-    case SemanticNodeType.tuple:
-        assert(0, "analyzeStatementNode for tuples not implemented");
-    case SemanticNodeType.symbol:
-        return 0; // symbols alone probably won't affect pass1
-    case SemanticNodeType.semanticCall:
-        return analyzeSemanticCallPass1(scope_, &semanticNode.semanticCall);
-    case SemanticNodeType.runtimeCall:
-        return analyzeRuntimeCallPass1(scope_, &semanticNode.runtimeCall);
-    case SemanticNodeType.statementBlock:
+        OptionalResultOrError!Symbol visitResult;
+        final override void visit(Symbol node) { this.visitResult = ResultOrError!Symbol(node); }
+        final override void visit(SemanticCall node)
         {
-            uint errorCount = 0;
-            foreach (ref statement; semanticNode.statementBlock.statements)
+            // only builtin functions that are available in pass 1 may be used here
+            // for now, the only function that support this is the symbol function
+            if (node.function_ is symbolFunction.instance)
             {
-                errorCount += analyzeStatementNodePass1(semanticNode.statementBlock.scope_, &statement);
-            }
-            return errorCount;
-        }
-    case SemanticNodeType.jump:
-        return 0; // ignore jumps in pass 1 for now
-    }
-}
-
-
-Flag!"analyzed" analyzeFunctionBody(UserDefinedFunction function_)
-{
-    for (; function_.codeAnalyzedCount < function_.analyzedCode.length;
-          function_.codeAnalyzedCount++)
-    {
-        if (!analyzeStatementNode(function_.containingScope,
-            &function_.analyzedCode[function_.codeAnalyzedCount]))
-        {
-            return No.analyzed;
-        }
-    }
-    return Yes.analyzed;
-}
-
-/+
-void analyzeStatementBlock(IScope scope_, SemanticNode[] semanticNodes,
-    AnalyzeState[] semanticNodeAnalyzeStates, ref size_t nodesAddedSymbols, ref size_t nodesAnalyzed)
-{
-ANALYZE_GLOBAL_NODES_LOOP:
-    while (nodesAnalyzed < semanticNodes.length)
-    {
-        auto nodesAnalyzedBeforePass = nodesAnalyzed;
-        foreach (i, ref node; semanticNodes)
-        {
-            if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
-            {
-                auto oldState = semanticNodeAnalyzeStates[i];
-                auto newState = analyzeStatementNode(scope_, &node);
-                // double check that nothing else modified the current state
-                assert(oldState == semanticNodeAnalyzeStates[i], "code bug");
-                if (newState != oldState)
+                auto result = symbolFunction.interpretPass2(node);
+                if (result.value)
+                    this.visitResult = OptionalResultOrError!Symbol(result.value);
+                else
                 {
-                    assert(newState.greaterThan(oldState), "code bug");
-                    semanticNodeAnalyzeStates[i] = newState;
-                    // NOTE: this logic is currently based on AnalyzeState having
-                    //       3 values: notAnalyzed, addedSymbols and analyzed
-                    if (oldState < AnalyzeState.addedSymbols)
-                    {
-                        assert(newState >= AnalyzeState.addedSymbols, "code bug");
-                        nodesAddedSymbols++;
-                    }
-                    if (newState == AnalyzeState.analyzed)
-                    {
-                        nodesAnalyzed++;
-                        if (nodesAnalyzed >= semanticNodes.length)
-                        {
-                            break ANALYZE_GLOBAL_NODES_LOOP;
-                        }
-                    }
+                    assert(result.errorCount > 0, "codebug");
+                    this.visitResult = OptionalResultOrError!Symbol(result.errorCount);
                 }
             }
         }
-
-        // if nothing new was analyzed
-        if (nodesAnalyzed == nodesAnalyzedBeforePass)
-        {
-            foreach (i, ref node; semanticNodes)
-            {
-                if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
-                {
-                    auto result = analyzer.analyzeStatementNode!Reporting(scope_, &node);
-                    assert(result > 0, "code bug: analyzeStatementNode failed but did not report any errors");
-                }
-            }
-            throw quit;
-        }
     }
+    scope visitor = new Visitor();
+    node.accept(visitor);
+    if (visitor.visitResult.value)
+        return ResultOrError!Symbol(visitor.visitResult.value);
+    if (visitor.visitResult.errorCount == 0)
+        return ResultOrError!Symbol(1);
+    return ResultOrError!Symbol(visitor.visitResult.errorCount);
 }
-+/

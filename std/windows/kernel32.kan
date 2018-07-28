@@ -8,9 +8,9 @@ absorb(windows)
 
 requireDll("kernel32.dll" {
 
-set(GetStdHandle function(HANDLE
-    DWORD stdHandle
-))
+set(GetStdHandle function(windows.HANDLE {
+    u32 stdHandle
+}))
 
 // TODO: make a wrapper around WriteFile
 //       it should be defined in the same set call and translate
@@ -20,8 +20,8 @@ set(WriteFile function(BOOL {
     HANDLE file
     const(ubyte) data
     u32 length
-    u32* lengthWritten
-    void* overlapped
+    ptr(u32) lengthWritten
+    ptr(void) overlapped
 }))
 
 

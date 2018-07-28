@@ -10,21 +10,20 @@ struct CallSyntaxNode
     string source;
     string functionName;
     uarray!SyntaxNode arguments;
-}
-@property auto base(inout(CallSyntaxNode)* callNode)
-{
-    return cast(SyntaxNode*)callNode;
+    auto base() inout { return cast(SyntaxNode*)&this; }
 }
 
 struct TupleSyntaxNode
 {
     string source;
     uarray!SyntaxNode nodes;
+    auto base() inout { return cast(SyntaxNode*)&this; }
 }
 struct StringSyntaxNode
 {
     string source;
     string str;
+    auto base() inout { return cast(SyntaxNode*)&this; }
 }
 
 enum KeywordType : ubyte
@@ -37,6 +36,7 @@ struct KeywordSyntaxNode
 {
     string source;
     KeywordType type;
+    auto base() inout { return cast(SyntaxNode*)&this; }
 }
 
 enum SyntaxNodeType

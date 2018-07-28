@@ -1,13 +1,39 @@
 module log;
 
-static import global;
+import more.format : StringSink;
 
+static import global;
+import common : passfail;
+import semantics : ResultOrError, NodeResult, Symbol;
+
+struct LocationFormatter
+{
+    string filename;
+    size_t lineNumber;
+    this(string filename, size_t lineNumber)
+    {
+        this.filename = filename;
+        this.lineNumber = lineNumber;
+    }
+    void toString(StringSink sink) const
+    {
+        import std.format : formattedWrite;
+        if (lineNumber > 0)
+        {
+            formattedWrite(sink, "%s(%s) ", filename, lineNumber);
+        }
+        else
+        {
+            formattedWrite(sink, "%s: ", filename);
+        }
+    }
+}
 
 //
 // TODO: I will probably add verbose categories at some point.
 //       Each category can have their own verbosity "level" as well.
 //
-pragma(inline) void verbose(T...)(ubyte level, string format, T args)
+pragma(inline) void verbose(Args...)(ubyte level, string format, Args args)
 {
     if (global.verbose > level)
     {
@@ -15,9 +41,53 @@ pragma(inline) void verbose(T...)(ubyte level, string format, T args)
     }
 }
 
-private void verboseFunction(T...)(ubyte level, string format, T args)
+private void verboseFunction(Args...)(ubyte level, string format, Args args)
 {
-    import std.stdio;
+    import std.stdio : writef, writefln;
     writef("[verbose%s] ", level);
     writefln(format, args);
 }
+
+void errorf(Location, Args...)(Location location, string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("%sError: ", location);
+    writefln(format, args);
+}
+uint errorfUint(Location, Args...)(Location location, string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("%sError: ", location);
+    writefln(format, args);
+    return 1; // 1 error
+}
+passfail errorfPassfail(Location, Args...)(Location location, string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("%sError: ", location);
+    writefln(format, args);
+    return passfail.fail;
+}
+
+NodeResult errorfNodeResult(Location, Args...)(Location location, string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("%sError: ", location);
+    writefln(format, args);
+    return NodeResult(1);
+}
+ResultOrError!Symbol errorfSymbolResult(Location, Args...)(Location location, string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("%sError: ", location);
+    writefln(format, args);
+    return ResultOrError!Symbol(1);
+}
+auto errorfNullable(T, Location, Args...)(Location location, string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("%sError: ", location);
+    writefln(format, args);
+    return null;
+}
+alias errorfString(Location, Args...) = errorfNullable!(string, Location, Args);

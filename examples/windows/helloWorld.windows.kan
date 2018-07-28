@@ -3,7 +3,7 @@ import(windows.kernel32)
 
 dumpSymbolTable()
 
-set(stdout kernel32.GetStdHandle(windows.STD_OUT_HANDLE))
+set(stdout kernel32.GetStdHandle(windows.STD_OUTPUT_HANDLE))
 set(bytesWritten alloca(u32))
 kernel32.WriteFile(stdout "HelloWorld" length("HelloWorld") ptrTo(bytesWritten) 0)
 

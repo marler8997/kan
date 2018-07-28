@@ -1,0 +1,4 @@
+import(linux.syscall)
+import(linux.file)
+
+syscall.write(file.stdout "HelloWorld" length("HelloWorld"))

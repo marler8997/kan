@@ -1,6 +1,5 @@
 module mod;
 
-import std.stdio;
 import std.typecons : Flag, Yes, No, scoped;
 import std.bitmanip : bitfields;
 import std.array  : Appender;
@@ -16,7 +15,8 @@ import more.format : StringSink;
 import more.file : readFile;
 
 static import global;
-import common : uarray, toUarray, toUint, toImmutable, from, singleton, quit,
+
+import common : uarray, toUarray, toUint, unconst, toImmutable, from, singleton, quit,
                 DirSeparatorChar, isDirSeparator, replaceAll, formatDir;
 import log;
 import id : Id;
@@ -26,7 +26,7 @@ import semantics;
 import types : IType, ModuleType;
 import symtab : SymbolTable;
 import interpreter : CodeBlockPosition, Interpreter;
-import analyzer : Reporting, AnalyzeState, greaterThan;
+import analyzer : AnalyzeOptions;
 static import analyzer;
 
 class Module : IScope
@@ -35,20 +35,10 @@ class Module : IScope
     const Flag!"rootCodeIsUsed" rootCodeIsUsed;
     Id.Value baseID;
     string importName; // the first import name that caused the module to be loaded.
-    private string contents;
+    string content;
     private uarray!SyntaxNode syntaxNodes;
     private uarray!SemanticNode semanticNodes;
-    private uarray!AnalyzeState semanticNodeAnalyzeStates;
 
-    private size_t nodesAddedSymbols;
-    private size_t nodesAnalyzed;
-    /*
-    mixin(bitfields!(
-        bool, "parsed", 1,
-        //bool, "analyzeStarted", 1,
-        void, null, 6
-    ));
-    */
     enum State : ubyte
     {
         initial,
@@ -87,11 +77,11 @@ class Module : IScope
     }
     void read()
     {
-        if (contents is null)
+        if (content is null)
         {
             verbose(0, "reading '%s'", filename);
-            contents = cast(string)readFile(filename, Yes.addNull);
-            assert(contents !is null);
+            content = cast(string)readFile(filename, Yes.addNull);
+            assert(content !is null);
         }
     }
     void parse()
@@ -100,7 +90,7 @@ class Module : IScope
             return;
 
         read();
-        auto parser = Parser(contents.ptr, filename);
+        auto parser = Parser(content.ptr, filename);
         auto nodesBuilder = Appender!(SyntaxNode[])();
         parser.parse(&nodesBuilder);
         this.syntaxNodes = nodesBuilder.data.toUarray;
@@ -125,162 +115,61 @@ class Module : IScope
         parse();
         assert(state == State.parsed);
         state = State.pass1Started;
+        verbose(0, "analyzePass1 '%s'", filename);
 
-        semanticNodes = createSemanticNodes(syntaxNodes);
+        semanticNodes = newSemanticNodes(syntaxNodes);
         uint errorCount = 0;
-        foreach (ref node; semanticNodes)
+        foreach (node; semanticNodes)
         {
-            errorCount += analyzer.analyzeStatementNodePass1(this, &node);
+            errorCount += analyzer.analyzeExpressionPass1(this, node);
         }
         assert(state == State.pass1Started, "codebug");
         state = State.pass1Done;
         return errorCount;
     }
 
-    void analyzePass2(Flag!"runContext" runContext)
+    uint analyzePass2(Flag!"runContext" runContext)
     {
         if (state >= State.pass2Started)
-            return;
+            return 0;
 
-        auto errorCount = analyzePass1();
-        if (state == State.pass1Started)
         {
-            from!"std.stdio".writefln("PossibleError: circular reference(1)?");
-            throw quit;
+            auto errorCount = analyzePass1();
+            if (state == State.pass1Started)
+            {
+                from!"std.stdio".writefln("PossibleError: circular reference(1)?");
+                return 1;
+                //throw quit;
+            }
+            if (errorCount > 0)
+                return errorCount;
         }
-        if (errorCount > 0)
-        {
-            // errors already logged
-            throw quit;
-        }
+
         assert(state == State.pass1Done, "codebug");
         state = State.pass2Started;
 
-        semanticNodeAnalyzeStates = new AnalyzeState[syntaxNodes.length].toUarray;
+        verbose(0, "analyzePass2 '%s'", filename);
 
-        verbose(0, "analyzing '%s'", filename);
-
-    ANALYZE_GLOBAL_NODES_LOOP:
-        while (nodesAnalyzed < semanticNodes.length)
         {
-            auto nodesAnalyzedBeforePass = nodesAnalyzed;
-            foreach (i, ref node; semanticNodes)
+            uint totalErrorCount = 0;
+            foreach (i; 0 .. semanticNodes.length)
             {
-                if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
-                {
-                    auto oldState = semanticNodeAnalyzeStates[i];
-                    auto newState = analyzer.analyzeStatementNode(this, &node);
-                    // double check that nothing else modified the current state
-                    assert(oldState == semanticNodeAnalyzeStates[i], "code bug");
-                    if (newState != oldState)
-                    {
-                        assert(newState.greaterThan(oldState), "code bug");
-                        semanticNodeAnalyzeStates[i] = newState;
-                        // NOTE: this logic is currently based on AnalyzeState having
-                        //       3 values: notAnalyzed, addedSymbols and analyzed
-                        if (oldState < AnalyzeState.addedSymbols)
-                        {
-                            assert(newState >= AnalyzeState.addedSymbols, "code bug");
-                            nodesAddedSymbols++;
-                        }
-                        if (newState == AnalyzeState.analyzed)
-                        {
-                            nodesAnalyzed++;
-                            if (nodesAnalyzed >= semanticNodes.length)
-                            {
-                                break ANALYZE_GLOBAL_NODES_LOOP;
-                            }
-                        }
-                    }
-                }
+                const errorCount = analyzer.analyzeExpressionPass2(this, &semanticNodes[i], AnalyzeOptions.none);
+                if (errorCount == 0)
+                    totalErrorCount += analyzer.enforceValidStatement(this, semanticNodes[i]);
+                else
+                    totalErrorCount += errorCount;
             }
-
-            // if nothing new was analyzed
-            if (nodesAnalyzed == nodesAnalyzedBeforePass)
-            {
-                foreach (i, ref node; semanticNodes)
-                {
-                    if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
-                    {
-                        auto result = analyzer.analyzeStatementNode!Reporting(this, &node);
-                        assert(result > 0, "code bug: analyzeStatementNode failed but did not report any errors");
-                    }
-                }
-                throw quit;
-            }
+            if (totalErrorCount > 0)
+                return totalErrorCount;
         }
+
+        assert(state == State.pass2Started, "codebug");
+        state = State.pass2Done;
+        return 0;
     }
+
     /+
-    void analyze()
-    {
-        if (analyzeStarted)
-        {
-            return;
-        }
-
-        parse();
-        semanticNodes = createSemanticNodes(syntaxNodes);
-        semanticNodeAnalyzeStates = new AnalyzeState[syntaxNodes.length].toUarray;
-        analyzeStarted = true;
-
-        verbose(0, "analyzing '%s'", filename);
-
-        // Pass 1, populate symbol tables
-        {
-        }
-
-    ANALYZE_GLOBAL_NODES_LOOP:
-        while (nodesAnalyzed < semanticNodes.length)
-        {
-            auto nodesAnalyzedBeforePass = nodesAnalyzed;
-            foreach (i, ref node; semanticNodes)
-            {
-                if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
-                {
-                    auto oldState = semanticNodeAnalyzeStates[i];
-                    auto newState = analyzer.analyzeStatementNode(this, &node);
-                    // double check that nothing else modified the current state
-                    assert(oldState == semanticNodeAnalyzeStates[i], "code bug");
-                    if (newState != oldState)
-                    {
-                        assert(newState.greaterThan(oldState), "code bug");
-                        semanticNodeAnalyzeStates[i] = newState;
-                        // NOTE: this logic is currently based on AnalyzeState having
-                        //       3 values: notAnalyzed, addedSymbols and analyzed
-                        if (oldState < AnalyzeState.addedSymbols)
-                        {
-                            assert(newState >= AnalyzeState.addedSymbols, "code bug");
-                            nodesAddedSymbols++;
-                        }
-                        if (newState == AnalyzeState.analyzed)
-                        {
-                            nodesAnalyzed++;
-                            if (nodesAnalyzed >= semanticNodes.length)
-                            {
-                                break ANALYZE_GLOBAL_NODES_LOOP;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // if nothing new was analyzed
-            if (nodesAnalyzed == nodesAnalyzedBeforePass)
-            {
-                foreach (i, ref node; semanticNodes)
-                {
-                    if (semanticNodeAnalyzeStates[i] != AnalyzeState.analyzed)
-                    {
-                        auto result = analyzer.analyzeStatementNode!Reporting(this, &node);
-                        assert(result > 0, "code bug: analyzeStatementNode failed but did not report any errors");
-                    }
-                }
-                throw quit;
-            }
-        }
-    }
-    +/
-
     private Builder!(UserDefinedFunction, GCDoubler!32) functionsToAnalyze;
     uint functionsToAnalyzeCount()
     {
@@ -306,73 +195,54 @@ class Module : IScope
             }
         }
     }
-    /+
-    void printSemanticErrorsForMatching()
-    {
-        foreach (i, ref node; semanticNodes)
-        {
-            if (!semanticNodeAnalyzeStates[i].analyzedForMatching)
-            {
-                analyzer.printAnalyzeForMatchingErrors(this, &node);
-            }
-        }
-    }
     +/
 
     void run()
     {
-        assert(semanticNodes.ptr != null && nodesAnalyzed == semanticNodes.length, "code bug");
+        assert(state == State.pass2Done, "codebug");
         auto interpreter = Interpreter();
         interpreter.blockStack.put(CodeBlockPosition(semanticNodes, 0));
         interpreter.run();
     }
     auto formatLocation(size_t lineNumber)
     {
-        return LocationFormatter(this, lineNumber);
+        return LocationFormatter(this.filename, lineNumber);
     }
     pragma(inline) auto formatLocation(string source) { return formatLocation(source.ptr); }
     auto formatLocation(immutable(char)* source)
     {
-        if (source < contents.ptr || source > contents.ptr + contents.length)
+        if (source < content.ptr || source > content.ptr + content.length)
         {
             assert(0, format("[CODEBUG] !!!!!!!!! formatLocation for file '%s' was given a source pointer that was not in the file", filename));
         }
-        return LocationFormatter(this, 1 + count(contents[0 .. source - contents.ptr], '\n'));
+        return LocationFormatter(this.filename, 1 + count(content[0 .. source - content.ptr], '\n'));
     }
     override string toString() const
     {
         return filename;
     }
     //
-    // Interface not defined yet functions
-    //
-    inout(TypedValue) asTypedValue() inout
-    {
-        return inout TypedValue(ModuleType.instance, inout Value(this));
-    }
-    //
     // IDotQualifiable Functions
     //
-    ResolveResult tryGetUnqualified(string symbol)
+    SemanticNode tryGetUnqualified(string symbol)
     {
         auto errorCount = analyzePass1();
+        if (errorCount > 0)
+        {
+            // ???
+        }
         if (state < State.pass1Done)
         {
             from!"std.stdio".writefln("PossibleError: circular reference?");
             throw quit;
         }
 
-        {
-            auto result = symbolTable.get(symbol);
-            if (!result.isNull)
-            {
-                return ResolveResult(result);
-            }
-        }
-
-        return ResolveResult.noEntryAndAllSymbolsAdded;
-        //return haveAllTopLevelSymbols() ? ResolveResult.noEntryAndAllSymbolsAdded :
-        //    ResolveResult.noEntryButMoreSymbolsCouldBeAdded;
+        return symbolTable.tryGet(symbol);
+    }
+    void scopeDescriptionFormatter(StringSink sink) const
+    {
+        sink("module ");
+        sink(importName);
     }
     void dumpSymbols() const
     {
@@ -388,44 +258,22 @@ class Module : IScope
     //
     // IScope Functions
     //
-    void add(const(string) symbol, TypedValue typedValue)
+    void add(const(string) symbol, SemanticNode node)
     {
-        auto existing = symbolTable.checkedAdd(symbol, typedValue);
-        if (!existing.isNull)
+        auto existing = symbolTable.checkedAdd(symbol, node);
+        if (existing)
         {
-            writefln("Error: %s already has a definition for symbol '%s'",
+            from!"std.stdio".writefln("Error: %s already has a definition for symbol '%s'",
                 /*formatLocation(assignment.symbol), */filename, symbol);
             throw quit;
         }
     }
-    void evaluated(const(string) symbol, TypedValue typedValue)
+    void evaluated(const(string) symbol, SemanticNode node)
     {
-        if (symbolTable.update(symbol, typedValue).failed)
+        if (symbolTable.update(symbol, node).failed)
         {
-            writefln("Error: CodeBug: attempted to update symbol '%s' but it does not exist!", symbol);
+            from!"std.stdio".writefln("Error: CodeBug: attempted to update symbol '%s' but it does not exist!", symbol);
             throw quit;
-        }
-    }
-}
-
-struct LocationFormatter
-{
-    Module module_;
-    size_t lineNumber;
-    this(Module module_, size_t lineNumber)
-    {
-        this.module_ = module_;
-        this.lineNumber = lineNumber;
-    }
-    void toString(StringSink sink) const
-    {
-        if (lineNumber > 0)
-        {
-            formattedWrite(sink, "%s(%s) ", module_.filename, lineNumber);
-        }
-        else
-        {
-            formattedWrite(sink, "%s: ", module_.filename);
         }
     }
 }
@@ -476,7 +324,7 @@ Module loadImport(string importName)
         {
             if (moduleFileName !is null)
             {
-                writefln("Error: module '%s' exists at '%s' and '%s'", importName, moduleFileName, filename);
+                from!"std.stdio".writefln("Error: module '%s' exists at '%s' and '%s'", importName, moduleFileName, filename);
                 throw quit;
             }
             moduleFileName = filename;
@@ -487,13 +335,13 @@ Module loadImport(string importName)
     {
         if (global.importPaths.data.length == 0)
         {
-            writefln("Error: cannot import '%s' because there are no include paths", importName);
+            from!"std.stdio".writefln("Error: cannot import '%s' because there are no include paths", importName);
             throw quit;
         }
-        writefln("Error: import \"%s\" is not found in any of the following include paths:", importName);
+        from!"std.stdio".writefln("Error: import \"%s\" is not found in any of the following include paths:", importName);
         foreach (i, importPath; global.importPaths.data)
         {
-            writefln("[%s] %s", i, importPath.formatDir);
+            from!"std.stdio".writefln("[%s] %s", i, importPath.formatDir);
         }
         throw quit;
     }
@@ -520,7 +368,7 @@ private Module loadModuleFromFileCommon(string filename, Flag!"rootCodeIsUsed" r
             }
             else if (module_.importName != importName)
             {
-                writefln("Error: file '%s' was imported with 2 different names '%s' and '%s'",
+                from!"std.stdio".writefln("Error: file '%s' was imported with 2 different names '%s' and '%s'",
                     filename, module_.importName, importName);
                 throw quit;
             }
@@ -535,13 +383,14 @@ private Module loadModuleFromFileCommon(string filename, Flag!"rootCodeIsUsed" r
 struct BuiltinSymbol
 {
     string symbol;
-    TypedValue typedValue;
+    SemanticNode node;
 
     static import builtin;
     import types;
     __gshared static immutable values = [
-        immutable BuiltinSymbol("u32", TypeTypeTemplate!(UnsignedFixedWidthType!32).instance.createTypedValue().toImmutable),
-        immutable BuiltinSymbol("leftIsLess", RuntimeFunctionType.instance.createTypedValue(builtin.leftIsLessFunction.instance)),
+        immutable BuiltinSymbol("u32", UnsignedFixedWidthType!32.instance),
+        immutable BuiltinSymbol("leftIsLess", builtin.leftIsLessFunction.instance),
+        immutable BuiltinSymbol("length", builtin.lengthFunction.instance),
     ];
 }
 
@@ -551,16 +400,17 @@ class UniversalScope : IReadonlyScope
     //
     // IDotQualifiable Functions
     //
-    ResolveResult tryGetUnqualified(string symbol)
+    SemanticNode tryGetUnqualified(string symbol)
     {
         //from!"std.stdio".writefln("Universal.tryGetUnqualified(\"%s\")", symbol);
         foreach (ref builtinSymbol; BuiltinSymbol.values)
         {
             if (builtinSymbol.symbol == symbol)
-                return ResolveResult(builtinSymbol.typedValue);
+                return builtinSymbol.node.unconst;
         }
-        return ResolveResult.noEntryAndAllSymbolsAdded;
+        return null;
     }
+    void scopeDescriptionFormatter(StringSink sink) const { sink("global scope"); }
     void dumpSymbols() const
     {
         assert(0, "UniversalScope.dumpSymbols not impelemented");
@@ -573,13 +423,4 @@ class UniversalScope : IReadonlyScope
     @property final inout(Module) asModule() inout { assert(0, "not implemented"); }
     @property final inout(IScope) asWriteable() inout { return null; }
     @property final inout(JumpBlock) asJumpBlock() inout { return null; }
-    /+
-    //
-    // IScope Functions
-    //
-    void add(const(string) symbol, const(TypedValue) typedValue)
-    {
-        assert(0, "not sure if adding to the universal scope should be allowed");
-    }
-    +/
 }

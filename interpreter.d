@@ -3,19 +3,32 @@ module interpreter;
 import std.array : Appender;
 import std.format : format;
 
-import common : from, uarray;
+import more.alloc : GCDoubler;
+import more.builder : Builder;
+
+import common : from, uarray, toUarray, quit;
 
 import syntax : SyntaxNodeType, SyntaxNode, CallSyntaxNode;
-import semantics : IScope, SemanticNodeType, SemanticNode, RuntimeCall,
-                   BuiltinRuntimeFunction, UserDefinedFunction, TypedValue,
-                   BlockFlags;
+import semantics/* : IHighLevelVisitor, IScope, SemanticNodeType, SemanticNode, RegularCall,
+                   BuiltinRegularFunction, UserDefinedFunction,
+                   BlockFlags*/;
+
+/*
+union InterpretTimeParamValue
+{
+    SemanticNode node;
+}
+*/
 
 struct CodeBlockPosition
 {
     static CodeBlockPosition nullValue() { return CodeBlockPosition(uarray!SemanticNode.init); }
+
     uarray!SemanticNode nodes;
     uint nextStatementIndex = void;
+    uarray!SemanticNode args;
     BlockFlags flags;
+    //Builder!(ubyte, GCDoubler!64) stack;
     pragma(inline) bool isNull() { return nodes.ptr == null; }
 }
 
@@ -61,15 +74,66 @@ struct Interpreter
                 }
                 //from!"std.stdio".writefln("intepret statement %s: %s", blockStack.current.nextStatementIndex,
                 //    blockStack.current.nodes[blockStack.current.nextStatementIndex]);
-                handle(&blockStack.current.nodes[blockStack.current.nextStatementIndex++]);
+                handle(blockStack.current.nodes[blockStack.current.nextStatementIndex++]);
                 if (blockStack.empty)
                     break BLOCK_STACK_LOOP;
             }
         }
     }
 
-    private void handle(SemanticNode* node)
+    private void handle(SemanticNode node)
     {
+        static class Visitor : IHighLevelVisitor
+        {
+            Interpreter* interpreter;
+            this(Interpreter* interpreter) { this.interpreter = interpreter; }
+            void visit(Tuple) { assert(0, "interpreter.handle(Tuple) not implemented"); }
+            //void visit(Void) { }
+            void visit(Symbol) { assert(0, "Symbol not implemented"); }
+            void visit(RegularCall node)
+            {
+
+                //from!"std.stdio".writefln("[DEBUG] interpret runtime funtion '%s'", node.runtimeCall.syntaxNode.functionName);
+                auto asBuiltin = cast(BuiltinRegularFunction)node.function_;
+                if (asBuiltin)
+                {
+                    asBuiltin.interpret(interpreter, node);
+                }
+                else
+                {
+                    auto userDefined = cast(UserDefinedFunction)node.function_;
+                    assert(userDefined, "codebug: expected BuiltinRegularFunction or UserDefinedFunction");
+
+                    // Setup the stack!
+                    // Need to map the call arguments to the function parameters
+                    if (node.arguments.length != userDefined.params.length)
+                    {
+                        from!"std.stdio".writefln("call argument count %s != function argument count %s, not implemented",
+                            node.arguments.length, userDefined.params.length);
+                        throw quit;
+                    }
+                    auto args = new SemanticNode[userDefined.params.length];
+                    foreach (argIndex; 0 .. node.arguments.length)
+                    {
+                        //node.arguments[argIndex].makeValue(&paramValues[argIndex]);
+                        args[argIndex] = node.arguments[argIndex];
+                    }
+
+                    interpreter.blockStack.put(CodeBlockPosition(userDefined.bodyNodes, 0, args.toUarray));
+                    //interpretRegularCall(&node.runtimeCall, asUserDefined);
+                }
+            }
+            void visit(SemanticCall) { assert(0, "SemanticCall not implemented"); }
+            void visit(BuiltinType) { assert(0, "BuiltinType not implemented"); }
+            void visit(SemanticFunction) { assert(0, "SemanticFunction not implemented"); }
+            void visit(RegularFunction) { assert(0, "RegularCall not implemented"); }
+            void visit(Value) { /* just ignore value*/ }
+            void visit(FunctionParameter) { assert(0, "FunctionParameter not implemented"); }
+            void visit(LazyNode) { assert(0, "LazyNode not implemented"); }
+        }
+        scope visitor = new Visitor(&this);
+        node.accept(visitor);
+        /+
         final switch(node.nodeType)
         {
         case SemanticNodeType.typedValue:
@@ -87,23 +151,6 @@ struct Interpreter
         case SemanticNodeType.semanticCall:
             handle(node.semanticCall.returnValue);
             break;
-        case SemanticNodeType.runtimeCall:
-            //from!"std.stdio".writefln("[DEBUG] interpret runtime funtion '%s'", node.runtimeCall.syntaxNode.functionName);
-            {
-                auto asBuiltin = cast(BuiltinRuntimeFunction)node.runtimeCall.function_;
-                if (asBuiltin)
-                {
-                    asBuiltin.interpret(&this, &node.runtimeCall);
-                }
-                else
-                {
-                    auto userDefined = cast(UserDefinedFunction)node.runtimeCall.function_;
-                    assert(userDefined, "code bug");
-                    blockStack.put(CodeBlockPosition(userDefined.analyzedCode, 0));
-                    //interpretRuntimeCall(&node.runtimeCall, asUserDefined);
-                }
-            }
-            break;
         case SemanticNodeType.statementBlock:
             blockStack.put(CodeBlockPosition(
                 node.statementBlock.statements, 0, node.statementBlock.flags
@@ -113,5 +160,6 @@ struct Interpreter
             assert(0, "jump not implemented");
             break;
         }
+        +/
     }
 }

@@ -8,12 +8,29 @@ set(printHelloFunctions function(void {}
 // Call the function
 printHelloFunctions()
 
+set(printNum1 function(void {u32 num}
+{
+    io.print("called printNum3 with " num)
+}))
+set(printNum2 function(void {u32 _}
+{
+    io.print("called printNum1 with " arg(0))
+}))
+set(printNum3 function(void {u32 num}
+{
+    io.print("called printNum2 with " arg(0))
+}))
+printNum1(42)
+//printNum2(123)
+//printNum3(951)
+
 //
 // Use the 'call' function to call functions
 //
 
 // Call the function using the 'call' method
 call(printHelloFunctions)
+call(symbol(printHelloFunctions))
 
 call(io.print "Print using call")
 
@@ -22,3 +39,9 @@ call(function(void {}
 {
     io.print("Hello Function Literals using call!")
 }))
+
+set(symbol(false) function(void {} {
+    io.print("calling func through keyword symbol")
+}))
+call(symbol(false))
+call(call(symbol false))

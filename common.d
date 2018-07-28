@@ -255,3 +255,13 @@ inout(T)[] replaceAll(T)(inout(T)[] array, const(T) from, const(T) to)
     }
     return Formatter(args);
 }
+
+struct DelegateAndArgsFormatter(T...)
+{
+    void delegate(StringSink sink) formatter;
+    T args;
+    void toString(StringSink sink) const
+    {
+        formatter(sink, args);
+    }
+}

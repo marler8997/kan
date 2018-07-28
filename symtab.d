@@ -5,14 +5,14 @@ import more.builder;
 
 import common : from, passfail;
 import typecons : Rebindable, rebindable;
-import semantics : TypedValue;
+import semantics : SemanticNode;
 
 struct SymbolTable
 {
     private struct Entry
     {
         string name;
-        TypedValue obj;
+        SemanticNode node;
     }
     Builder!(Entry,GCDoubler!16) table;
 
@@ -21,17 +21,17 @@ struct SymbolTable
         static EntryReference nullValue() { return EntryReference(index.max); }
         private size_t index;
         bool isNull() const { return index == index.max; }
-        TypedValue getObj(SymbolTable* symtab) const
+        SemanticNode getNode(SymbolTable* symtab) const
         {
-            return symtab.table.data[index].obj;
+            return symtab.table.data[index].node;
         }
-        void update(SymbolTable* symtab, TypedValue obj) const
+        void update(SymbolTable* symtab, SemanticNode node) const
         {
-            symtab.table.data[index].obj = obj;
+            symtab.table.data[index].node = node;
         }
     }
 
-    EntryReference tryGetEntryRef(string name)
+    EntryReference tryGetRef(string name)
     {
         foreach (i, entry; table.data)
         {
@@ -45,39 +45,31 @@ struct SymbolTable
         return EntryReference.nullValue;
     }
 
-    const(TypedValue) get(string name)
+    SemanticNode tryGet(string name)
     {
-        auto entryRef = tryGetEntryRef(name);
-        if (entryRef.isNull)
-            return TypedValue.nullValue;
-
-        auto obj = entryRef.getObj(&this);
-        auto unevaluated = obj.tryAsUnevaluatedSymbol;
-        if (unevaluated)
-        {
-            auto evaluated = unevaluated.tryEvaluate();
-            entryRef.update(&this, evaluated);
-            return evaluated;
-        }
-        return obj;
+        auto entryRef = tryGetRef(name);
+        return entryRef.isNull ? null : entryRef.getNode(&this);
     }
-    passfail update(string name, TypedValue obj)
+    passfail update(string name, SemanticNode node)
     {
-        auto entryRef = tryGetEntryRef(name);
+        auto entryRef = tryGetRef(name);
         if (entryRef.isNull)
             return passfail.fail;
-        entryRef.update(&this, obj);
+        entryRef.update(&this, node);
         return passfail.fail;
     }
-    const(TypedValue) checkedAdd(string name, TypedValue obj)
+    /**
+    Returns: null if successfully added, otherwise, the current entry.
+    */
+    SemanticNode checkedAdd(string name, SemanticNode obj)
     {
-        auto entryRef = tryGetEntryRef(name);
+        auto entryRef = tryGetRef(name);
         if (entryRef.isNull)
         {
             table.append(Entry(name, obj));
-            return TypedValue.nullValue; // successfully added
+            return null; // successfully added
         }
-        return entryRef.getObj(&this); // did not add, already an entry with this name
+        return entryRef.getNode(&this); // did not add, already an entry with this name
     }
     void dump() const
     {

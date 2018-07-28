@@ -1,0 +1,14 @@
+
+/*
+set(FileD type(
+    baseType u32
+))
+*/
+set(FileD u32)
+
+//set(stdin FileD(0))
+//set(stdout FileD(1))
+//set(stderr FileD(2))
+set(stdin 0)
+set(stdout 1)
+set(stderr 2)
