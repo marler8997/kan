@@ -2,9 +2,12 @@
 // todo define the HANDLE type
 // todo define the BOOL type
 
+import(stdc)
 import(windows)
 
 absorb(windows)
+
+dumpSymbolTable()
 
 requireDll("kernel32.dll" {
 
@@ -16,7 +19,9 @@ set(GetStdHandle function(windows.HANDLE {
 //       it should be defined in the same set call and translate
 //       a single "data/length" variable to the data/length arguments for the actual function
 // TODO: extern(Windows)
-set(WriteFile function(BOOL {
+// TODO: return type should have the storage length of c.int, but it should
+//       be wrapped by a type BOOL that contains methods like "value.pass" or "value.fail"
+set(WriteFile function(stdc.int {
     HANDLE file
     const(ubyte) data
     u32 length

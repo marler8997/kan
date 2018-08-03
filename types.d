@@ -136,19 +136,12 @@ bool canBeIgnoredAsReturnValue(const(IType) type)
     return false;
 }
 
-// TODO:
-// I'm probably going to get rid of this base class
-// and split it up into a series of interfaces
-interface TypeClass : IType
-{
-    //SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const;
-}
 class VoidType : TypeType, IIgnorable
 {
     mixin singleton;
 
     //
-    // IType Functions
+    // IType methods
     //
     override bool supports(SemanticNode node)
     {
@@ -156,7 +149,7 @@ class VoidType : TypeType, IIgnorable
     }
 
     //
-    // Type Functions
+    // Type methods
     //
     final override void formatter(StringSink sink) const { sink("void"); }
 
@@ -168,12 +161,12 @@ class VoidType : TypeType, IIgnorable
     }
     +/
 }
-class AnySingleThing : TypeClass, IType
+class AnySingleThing : IType
 {
     mixin singleton;
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -182,7 +175,7 @@ class AnySingleThing : TypeClass, IType
     final void formatter(StringSink sink) const { sink("AnySingleThing"); }
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     final override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const
@@ -197,12 +190,41 @@ class AnySingleThing : TypeClass, IType
     +/
 }
 
-class NumberType
+class VoidPtrType : BuiltinType
 {
     mixin singleton;
+    //
+    // IType methods
+    //
+    final override bool supports(SemanticNode node)
+    {
+        assert(0, "not implemented");
+    }
+    final override void formatter(StringSink sink) const { sink("ptrTo(void)"); }
+    //
+    // IValuePrinter methods
+    //
+    final void print(StringSink sink, const(Value) value) const
+    {
+        assert(0, "not implemented");
+        //sink(get(value).source);
+    }
 }
 
-class NumberLiteralType : /*TypeClass, */IType, IValuePrinter
+class NumberType : BuiltinType
+{
+    //mixin singleton;
+    //
+    // IValuePrinter methods
+    //
+    final void print(StringSink sink, const(Value) value) const
+    {
+        assert(0, "not implemented");
+        //sink(get(value).source);
+    }
+}
+
+class NumberLiteralType : IType, IValuePrinter
 {
     mixin singleton;
 
@@ -215,7 +237,7 @@ class NumberLiteralType : /*TypeClass, */IType, IValuePrinter
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -223,7 +245,7 @@ class NumberLiteralType : /*TypeClass, */IType, IValuePrinter
     }
     final override void formatter(StringSink sink) const { sink("NumberLiteral"); }
     //
-    // IValuePrinter Functions
+    // IValuePrinter methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -231,7 +253,7 @@ class NumberLiteralType : /*TypeClass, */IType, IValuePrinter
         //sink(get(value).source);
     }
 }
-class SymbolType : TypeClass, IType
+class SymbolType : IType
 {
     mixin singleton;
 
@@ -244,7 +266,7 @@ class SymbolType : TypeClass, IType
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -253,7 +275,7 @@ class SymbolType : TypeClass, IType
     final override void formatter(StringSink sink) const { sink("symbol"); }
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     final override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const
@@ -280,15 +302,15 @@ class StringLiteralType : BuiltinType, IType, IValuePrinter
     }
     */
     //
-    // IType Functions
+    // IType methods
     //
-    final bool supports(SemanticNode node)
+    final override bool supports(SemanticNode node)
     {
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("string"); }
     //
-    // IValuePrinter Functions
+    // IValuePrinter methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -297,7 +319,7 @@ class StringLiteralType : BuiltinType, IType, IValuePrinter
     }
 }
 
-class StringType : TypeClass, IType, IValuePrinter
+class StringType : IType, IValuePrinter
 {
     mixin singleton;
 
@@ -310,7 +332,7 @@ class StringType : TypeClass, IType, IValuePrinter
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -318,7 +340,7 @@ class StringType : TypeClass, IType, IValuePrinter
     }
     final override void formatter(StringSink sink) const { sink("string"); }
     //
-    // IValuePrinter Functions
+    // IValuePrinter methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -326,7 +348,7 @@ class StringType : TypeClass, IType, IValuePrinter
         //sink(get(value).str);
     }
 }
-class BoolType : TypeClass, IType
+class BoolType : IType
 {
     mixin singleton;
     mixin valueCreatorAndGetter!("", "bool");
@@ -342,7 +364,7 @@ class BoolType : TypeClass, IType
     }
     */
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -357,7 +379,7 @@ class TupleLiteralType : IType, IRangeType
     mixin valueCreatorAndGetter!("inout", "TupleNode*");
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -368,7 +390,7 @@ class TupleLiteralType : IType, IRangeType
 
 // TODO: this class could be replaced by TypedNoLimitSetType with
 //       the AnySingleThing type
-class UntypedNoLimitSetType : TypeClass, IType
+class UntypedNoLimitSetType : IType
 {
     mixin singleton;
     mixin valueCreatorAndGetter!("inout", "uarray!SemanticNode");
@@ -380,7 +402,7 @@ class UntypedNoLimitSetType : TypeClass, IType
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -389,7 +411,7 @@ class UntypedNoLimitSetType : TypeClass, IType
     final override void formatter(StringSink sink) const { sink("set"); }
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     final override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const
@@ -424,15 +446,15 @@ class UntypedNoLimitSetType : TypeClass, IType
     }
     +/
 }
-class TypedNoLimitSetType : TypeClass, IType
+class TypedNoLimitSetType : IType
 {
     static auto singletonOf(T)()
     {
         static immutable instance = new immutable TypedNoLimitSetType(T.instance);
         return instance;
     }
-    TypeClass type;
-    this(immutable(TypeClass) type) immutable { this.type = type; }
+    IType type;
+    this(immutable(IType) type) immutable { this.type = type; }
     mixin valueCreatorAndGetter!("inout", "uarray!SemanticNode");
     /*
     final inout(TypedValue) createTypedValue(inout(SemanticNode)[] semanticNodes) const
@@ -442,7 +464,7 @@ class TypedNoLimitSetType : TypeClass, IType
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -454,7 +476,7 @@ class TypedNoLimitSetType : TypeClass, IType
     }
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     final override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const
@@ -511,7 +533,7 @@ class TypedNoLimitSetType : TypeClass, IType
 }
 
 /+
-class LimitedSetType : TypeClass, IType
+class LimitedSetType : IType
 {
     /*
     static auto singletonAnyCountOf(T)()
@@ -529,7 +551,7 @@ class LimitedSetType : TypeClass, IType
         this.countRange = countRange;
     }
     //
-    // Type Functions
+    // Type methods
     //
     @property final override inout(IDotQualifiable) tryAsIDotQualifiable(inout(Value) value) const
     {
@@ -565,12 +587,12 @@ class LimitedSetType : TypeClass, IType
 
 
 // The "StringSink" type is defined as any function that accepts strings
-class StringSinkType : TypeClass, IType
+class StringSinkType : IType
 {
     mixin singleton;
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -581,12 +603,12 @@ class StringSinkType : TypeClass, IType
 
 // The "Printable" type is defined as the set of values that have a function called "toString" that print the value.
 // toString(x, sink)
-class PrintableType : TypeClass, IType
+class PrintableType : IType
 {
     mixin singleton;
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -594,12 +616,12 @@ class PrintableType : TypeClass, IType
     }
 
     //
-    // Type Functions
+    // Type methods
     //
     final override void formatter(StringSink sink) const { sink("Printable"); }
 }
 
-class FlagType : TypeClass, IType
+class FlagType : IType
 {
     mixin singleton;
 
@@ -616,7 +638,7 @@ class FlagType : TypeClass, IType
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -626,16 +648,16 @@ class FlagType : TypeClass, IType
 }
 
 // The "Integer" type is an ifinite precision whole number
-class IntegerType : BuiltinType, IType
+class IntegerType : NumberType, IType
 {
     mixin singleton;
 
     //mixin valueCreatorAndGetter!("", "string");
 
     //
-    // IType Functions
+    // IType methods
     //
-    final bool supports(SemanticNode node)
+    final override bool supports(SemanticNode node)
     {
         assert(0, "not implemented");
     }
@@ -656,7 +678,7 @@ class UnsignedFixedWidthType(ushort bitWidth) : UnsignedType
 }
 
 
-class Multi : TypeClass, IType
+class Multi : IType
 {
     static auto singletonAnyCountOf(T)()
     {
@@ -664,16 +686,16 @@ class Multi : TypeClass, IType
         return instance;
     }
 
-    TypeClass type;
+    IType type;
     PositiveRange countRange;
-    this(immutable(TypeClass) type, PositiveRange countRange) immutable
+    this(immutable(IType) type, PositiveRange countRange) immutable
     {
         this.type = type;
         this.countRange = countRange;
     }
 
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {
@@ -685,7 +707,7 @@ class Multi : TypeClass, IType
     }
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     final override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* outOffset) const
@@ -722,10 +744,10 @@ class Multi : TypeClass, IType
     +/
 }
 
-abstract class ScopeType : TypeClass, IType//, IValueToDotQualifiable
+abstract class ScopeType : IType//, IValueToDotQualifiable
 {
     //
-    // IType Functions
+    // IType methods
     //
     bool supports(SemanticNode node)
     {
@@ -734,7 +756,7 @@ abstract class ScopeType : TypeClass, IType//, IValueToDotQualifiable
     override void formatter(StringSink sink) const { sink("scope"); }
 
     //
-    // IValueToDotQualifiable Functions
+    // IValueToDotQualifiable methods
     //
     //@property abstract inout(IDotQualifiable) tryAsIDotQualifiable(inout(Value) value) const;
 }
@@ -746,7 +768,7 @@ class ModuleType : ScopeType
     mixin valueCreatorAndGetter!("inout", "Module");
 
     //
-    // IType Functions
+    // IType methods
     //
     override bool supports(SemanticNode node)
     {
@@ -755,7 +777,7 @@ class ModuleType : ScopeType
     final override void formatter(StringSink sink) const { sink("module"); }
 
     //
-    // IValueToDotQualifiable Functions
+    // IValueToDotQualifiable methods
     //
     //@property final override inout(IDotQualifiable) tryAsIDotQualifiable(inout(Value) value) const
     //{
@@ -765,14 +787,14 @@ class ModuleType : ScopeType
 
 
 // A "TypeType" is a "Type" that can be "hold" another type.
-class TypeType : TypeClass, IType//, IValueToDotQualifiable
+class TypeType : IType//, IValueToDotQualifiable
 {
     mixin singleton;
 
     mixin valueCreatorAndGetter!("inout", "IType");
 
     //
-    // IType Functions
+    // IType methods
     //
     bool supports(SemanticNode node)
     {
@@ -781,7 +803,7 @@ class TypeType : TypeClass, IType//, IValueToDotQualifiable
     override void formatter(StringSink sink) const { sink("type"); }
 
     //
-    // IValueToDotQualifiable Functions
+    // IValueToDotQualifiable methods
     //
     //@property inout(IDotQualifiable) tryAsIDotQualifiable(inout(Value) value) const
     //{
@@ -789,7 +811,7 @@ class TypeType : TypeClass, IType//, IValueToDotQualifiable
     //}
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const
@@ -834,7 +856,7 @@ class TypeTypeTemplate(T) : TypeType
 
 
 
-class OptionalType : TypeClass, IType
+class OptionalType : IType
 {
     static auto singletonOf(T)()
     {
@@ -842,8 +864,8 @@ class OptionalType : TypeClass, IType
         return instance;
     }
 
-    TypeClass type;
-    this(immutable(TypeClass) type) immutable { this.type = type; }
+    IType type;
+    this(immutable(IType) type) immutable { this.type = type; }
     /*
     this(inout(Type) type) inout
     {
@@ -852,7 +874,7 @@ class OptionalType : TypeClass, IType
     */
 
     //
-    // IType Functions
+    // IType methods
     //
     override bool supports(SemanticNode node)
     {
@@ -864,7 +886,7 @@ class OptionalType : TypeClass, IType
     }
 
     //
-    // Type Functions
+    // Type methods
     //
     /+
     final override SatisfyState tryConsume(IScope scope_, SemanticNode[] args, ushort* offset) const
@@ -886,7 +908,7 @@ class SemanticFunctionType : IType
     mixin valueCreatorAndGetter!("inout", "SemanticFunction");
 
     //
-    // IType Functions
+    // IType methods
     //
     bool supports(SemanticNode node)
     {
@@ -895,14 +917,14 @@ class SemanticFunctionType : IType
     override void formatter(StringSink sink) const { sink("SemanticFunction"); }
 }
 
-class RuntimeFunctionType : TypeClass, IType
+class RuntimeFunctionType : IType
 {
     mixin singleton;
 
     mixin valueCreatorAndGetter!("inout", "RuntimeFunction");
 
     //
-    // IType Functions
+    // IType methods
     //
     bool supports(SemanticNode node)
     {
@@ -917,7 +939,7 @@ class UserDefinedRuntimeFunctionType : RuntimeFunctionType
     //mixin valueCreatorAndGetter!("inout", "UserDefinedFunction");
 
     //
-    // IType Functions
+    // IType methods
     //
     override bool supports(SemanticNode node)
     {
@@ -926,13 +948,13 @@ class UserDefinedRuntimeFunctionType : RuntimeFunctionType
     final override void formatter(StringSink sink) const { sink("UserDefinedRuntimeFunction"); }
 }
 
-class RuntimeCallType : TypeClass, IType
+class RuntimeCallType : IType
 {
     mixin singleton;
     mixin valueCreatorAndGetter!("inout", "RuntimeCall");
 
     //
-    // IType Functions
+    // IType methods
     //
     bool supports(SemanticNode node)
     {
@@ -945,7 +967,7 @@ class SemanticCallType : IType, IValuePrinter
     mixin singleton;
     mixin valueCreatorAndGetter!("inout", "SemanticCall");
     //
-    // IType Functions
+    // IType methods
     //
     bool supports(SemanticNode node)
     {
@@ -972,7 +994,7 @@ class BuiltinRuntimeFunctionType : RuntimeFunctionType
     mixin valueCreatorAndGetter!("inout", "BuiltinRuntimeFunction");
 
     //
-    // IType Functions
+    // IType methods
     //
     override bool supports(SemanticNode node)
     {
@@ -996,9 +1018,9 @@ class EnumType : BuiltinType, IType//, IValuePrinter
     mixin valueCreatorAndGetter!("", "string");
 
     //
-    // IType Functions
+    // IType methods
     //
-    final bool supports(SemanticNode node)
+    final override bool supports(SemanticNode node)
     {
         assert(0, "not implemented");
     }
@@ -1009,14 +1031,14 @@ class EnumType : BuiltinType, IType//, IValuePrinter
     //
     // IDotQualifiable Function
     //
-    final override SemanticNode tryGetUnqualified(string member)
+    final override OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
     {
         foreach (value; values)
         {
-            if (value.name == member)
-                return value;
+            if (value.name == symbol)
+                return OptionalNodeResult(value);
         }
-        return null;
+        return OptionalNodeResult(null);
     }
     override void scopeDescriptionFormatter(StringSink sink) const { sink("enum type"); }
     void dumpSymbols() const
@@ -1024,7 +1046,7 @@ class EnumType : BuiltinType, IType//, IValuePrinter
         assert(0, "EnumType.dumpSymbols not impelemented");
     }
     //
-    // IValuePrinter Functions
+    // IValuePrinter methods
     //
     //final void print(StringSink sink, const(Value) value) const
     //{
@@ -1037,7 +1059,7 @@ class StatementBlockType : IType
     mixin singleton;
     mixin valueCreatorAndGetter!("inout", "StatementBlock*");
     //
-    // IType Functions
+    // IType methods
     //
     final bool supports(SemanticNode node)
     {

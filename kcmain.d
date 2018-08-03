@@ -105,15 +105,16 @@ int tryMain(string[] args)
 
     auto filenames = args;
     auto commandLineModules = new Module[filenames.length];
+    auto isEntryModule = (filenames.length == 1) ? Yes.isEntryModule : No.isEntryModule;
     foreach (index, filename; filenames)
     {
-        commandLineModules[index] = loadModuleFromFilename(filename, Yes.rootCodeIsUsed, null);
+        commandLineModules[index] = loadModuleFromFilename(filename, isEntryModule, null);
     }
     {
         uint errorCount = 0;
         foreach (module_; commandLineModules)
         {
-            errorCount += module_.analyzePass2(Yes.runContext);
+            errorCount += module_.analyzePass2();
         }
         if (errorCount > 0)
             return 1;

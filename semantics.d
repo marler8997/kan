@@ -195,7 +195,7 @@ class TupleFromSyntaxNode : Tuple
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("syntax-tuple"); }
     //
     // SemanticNode methods
@@ -218,7 +218,7 @@ class Void : SemanticNode
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("void"); }
     //
     // SemanticNode methods
@@ -261,7 +261,7 @@ class VoidKeyword : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("void"); }
     //
     // SemanticNode methods
@@ -287,7 +287,7 @@ class VoidValue : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("void"); }
     //
     // SemanticNode methods
@@ -331,7 +331,7 @@ class SymbolFromSyntax : Symbol
     //
     // SemanticNode methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
 }
 
@@ -343,7 +343,7 @@ class Call : SemanticNode
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     //
     // SemanticNode methods
     //
@@ -464,7 +464,7 @@ class Bool : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("bool value"); }
     //
     // SemanticNode methods
@@ -481,7 +481,7 @@ class Number : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("number value"); }
 }
 class NumberLiteral : Number
@@ -515,7 +515,7 @@ class StringLiteral : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("string literal"); }
     //
     // SemanticNode methods
@@ -543,7 +543,7 @@ class FlagValue : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("flag value"); }
     //
     // SemanticNode methods
@@ -573,7 +573,7 @@ class EnumValue : Value
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("eum value"); }
     //
     // SemanticNode methods
@@ -590,13 +590,18 @@ class EnumValue : Value
     final override IType getType() const { return type.unconst; }
 }
 
-class BuiltinType : SemanticNode
+class BuiltinType : SemanticNode, IType
 {
     mixin SemanticNodeMixin;
     //
+    // IType methods
+    //
+    abstract bool supports(SemanticNode node);
+    abstract void formatter(StringSink sink) const;
+    //
     // IDotQualifiable methods
     //
-    SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("type"); }
     //
     // SemanticNode methods
@@ -631,7 +636,7 @@ class FunctionParameter : Value
     //
     // IDotQualifiable methods
     //
-    SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("function parameter"); }
     //
     // SemanticNode methods
@@ -667,7 +672,7 @@ class LazyNode : SemanticNode
     //
     // IDotQualifiable methods
     //
-    SemanticNode tryGetUnqualified(string symbol)
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
     {
         assert(0, "codebug? I don't think tryGetUnqualified should be called on a LazyNode");
     }
@@ -690,7 +695,8 @@ class ImportedModule : Value
     //
     // IDotQualifiable methods
     //
-    SemanticNode tryGetUnqualified(string symbol) { return mod.tryGetUnqualified(symbol); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
+    { return mod.tryGetUnqualified(symbol, fromInside); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("module "); sink(mod.importName); }
     //
     // SemanticNode methods
@@ -771,6 +777,17 @@ auto peelQualifier(string* symbol)
     return returnValue;
 }
 
+bool valueIsNull(T)(T value)
+{
+    static if (is(T == class))
+    {
+        return value is null;
+    }
+    else
+    {
+        return value.isNull;
+    }
+}
 struct OptionalResultOrError(T)
 {
     uint errorCount;
@@ -796,6 +813,7 @@ struct ResultOrError(T)
         this.errorCount = errorCount;
     }
     this(T value)
+    in { assert(!valueIsNull(value), "codebug, cannot set to null"); } do
     {
         this.errorCount = 0;
         this.value = value;
@@ -855,7 +873,7 @@ alias SemanticCallResult = ResolveResultTemplate!(SemanticNode);
 interface IDotQualifiable
 {
     // try to get a symbol table entry that matches the given symbol
-    SemanticNode tryGetUnqualified(string symbol);
+    OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside);
     void scopeDescriptionFormatter(StringSink sink) const;
 }
 DelegateFormatter formatScopeDescription(const(IDotQualifiable) qualifiable)
@@ -870,6 +888,7 @@ interface IReadonlyScope : IDotQualifiable
     @property inout(Module) asModule() inout;
     @property inout(IScope) asWriteable() inout;
     @property inout(JumpBlock) asJumpBlock() inout;
+    uint prepareForChildAnalyzePass2();
 }
 inout(Module) getModule(inout(IReadonlyScope) scope_)
 {
@@ -884,6 +903,7 @@ inout(Module) getModule(inout(IReadonlyScope) scope_)
             assert(0, "this scope is not inside a module");
     }
 }
+
 inout(JumpBlock) tryGetJumpBlock(inout(IReadonlyScope) scope_)
 {
     auto next = rebindable(scope_);
@@ -1215,8 +1235,8 @@ class SemanticFunction : SemanticNode
     {
         return false;
     }
-    abstract uint interpretPass1(IScope scope_, SemanticCall call);
-    abstract NodeResult interpretPass2(IReadonlyScope scope_, SemanticCall call/*, Flag!"used" used*/) const;
+    abstract uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call);
+    abstract NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call/*, Flag!"used" used*/) const;
 
     final void printErrorsForInterpret(IReadonlyScope scope_, SemanticCall call, Flag!"used" used) const
     {
@@ -1258,7 +1278,7 @@ class SemanticFunction : SemanticNode
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("semantic function"); }
     //
     // SemanticNode methods
@@ -1598,7 +1618,7 @@ class BuiltinRegularFunction : RegularFunction
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("builtin function"); }
     //
     // SemanticNode methods
@@ -1667,10 +1687,17 @@ class UserDefinedFunction : RegularFunction, IScope
     //
     // IDotQualifiable methods
     //
-    final SemanticNode tryGetUnqualified(string symbol)
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
     {
-        assert(state == State.pass2Started, "codebug?");
-        return bodySymbolTable.tryGet(symbol);
+        if (fromInside)
+        {
+            assert(state == State.pass2Started, "codebug?");
+            return OptionalNodeResult(bodySymbolTable.tryGet(symbol));
+        }
+        else
+        {
+            assert(0, "not implemented");
+        }
     }
     void scopeDescriptionFormatter(StringSink sink) const { sink("function"); }
     void dumpSymbols() const
@@ -1687,14 +1714,33 @@ class UserDefinedFunction : RegularFunction, IScope
         sink("<user-defined-function>");
     }
     //
-    // IReadonlyScope Functions
+    // IReadonlyScope methods
     //
     @property final inout(IReadonlyScope) getParent() inout { return containingScope; }
     @property final inout(Module) asModule() inout { return null; }
     @property final inout(IScope) asWriteable() inout { return this; }
     @property final inout(JumpBlock) asJumpBlock() inout { return null; }
+    final uint prepareForChildAnalyzePass2()
+    {
+        /*
+        I think this could happen if you have a call to a function
+        that is defined inside this function. i.e.
+        function(auto {} {
+            set(foo function(auto {} {}))
+            foo() // when this function is analyzed, it should call this function for
+                  // the parent function scope
+        })
+        */
+        // I don't actually think we need to do anything here, because if we are analyzing
+        // a call to a child function, then it must mean we have already done pass1?  Note
+        // that this also means that you cannot call a funciton inside a function outside
+        // that function.  This makes sense, if you want to call it outside the funciton, then
+        // define it outside the function.
+        assert(state == State.pass2Started, "codebug?");
+        return 0;
+    }
     //
-    // IScope Functions
+    // IScope methods
     //
     void add(const(string) symbol, SemanticNode node)
     {
@@ -1769,12 +1815,19 @@ class JumpBlock : IScope
     //
     // IDotQualifiable functions
     //
-    SemanticNode tryGetUnqualified(string symbol)
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
     {
-        // !!!!!!!!!!!!!!!!!!!!!!!
-        // TODO: this is probably not right
-        // !!!!!!!!!!!!!!!!!!!!!!!
-        return symbolTable.tryGet(symbol);
+        if (fromInside)
+        {
+            // !!!!!!!!!!!!!!!!!!!!!!!
+            // TODO: this is probably not right
+            // !!!!!!!!!!!!!!!!!!!!!!!
+            return OptionalNodeResult(symbolTable.tryGet(symbol));
+        }
+        else
+        {
+            assert(0, "not implemented");
+        }
     }
     void scopeDescriptionFormatter(StringSink sink) const { sink("jump block"); }
     void dumpSymbols() const
@@ -1788,6 +1841,10 @@ class JumpBlock : IScope
     @property final inout(Module) asModule() inout { return null; }
     @property final inout(IScope) asWriteable() inout { return this; }
     @property final inout(JumpBlock) asJumpBlock() inout { return this; }
+    final uint prepareForChildAnalyzePass2()
+    {
+        assert(0, "not implemented");
+    }
     //
     // IScope functions
     //

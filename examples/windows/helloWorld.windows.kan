@@ -1,7 +1,7 @@
 import(windows)
 import(windows.kernel32)
 
-dumpSymbolTable()
+//dumpSymbolTable()
 
 set(stdout kernel32.GetStdHandle(windows.STD_OUTPUT_HANDLE))
 set(bytesWritten alloca(u32))

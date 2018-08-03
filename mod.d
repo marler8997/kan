@@ -32,7 +32,8 @@ static import analyzer;
 class Module : IScope
 {
     string filename;
-    const Flag!"rootCodeIsUsed" rootCodeIsUsed;
+    // The entry module can contain runtime code in the global scope
+    const Flag!"isEntryModule" isEntryModule;
     Id.Value baseID;
     string importName; // the first import name that caused the module to be loaded.
     string content;
@@ -57,14 +58,14 @@ class Module : IScope
     private this() immutable
     {
         this.filename = "<builtin>";
-        this.rootCodeIsUsed = No.rootCodeIsUsed;
+        this.isEntryModule = No.isEntryModule;
     }
-    this(string filename, Flag!"rootCodeIsUsed" rootCodeIsUsed, string importName)
+    private this(string filename, Flag!"isEntryModule" isEntryModule, string importName)
     {
         this.filename = filename;
         // Note: this should be determined when creating the module and should not change
         //       this affects how top-level code of the module is analyzed
-        this.rootCodeIsUsed = rootCodeIsUsed;
+        this.isEntryModule = isEntryModule;
         this.importName = importName;
         if (importName !is null)
         {
@@ -75,7 +76,8 @@ class Module : IScope
             //assert(0, "not implemented");
         }
     }
-    void read()
+
+    private void read()
     {
         if (content is null)
         {
@@ -84,7 +86,7 @@ class Module : IScope
             assert(content !is null);
         }
     }
-    void parse()
+    private void parse()
     {
         if (state >= State.parsed)
             return;
@@ -97,17 +99,7 @@ class Module : IScope
         state = State.parsed;
     }
 
-    /+
-    bool haveAllTopLevelSymbols()
-    {
-        // Need a way of knowing all the ways symbols can be added so that when
-        // we are looking for symbols, we know whether or not that symbol could be added
-        // to a "lower scope".
-        return analyzeStarted && nodesAddedSymbols == semanticNodes.length;
-    }
-    +/
-
-    uint analyzePass1()
+    private uint analyzePass1()
     {
         if (state >= State.pass1Started)
             return 0;
@@ -115,20 +107,22 @@ class Module : IScope
         parse();
         assert(state == State.parsed);
         state = State.pass1Started;
-        verbose(0, "analyzePass1 '%s'", filename);
+        verbose(0, "analyzePass1 '%s' Started", filename);
 
         semanticNodes = newSemanticNodes(syntaxNodes);
         uint errorCount = 0;
         foreach (node; semanticNodes)
         {
-            errorCount += analyzer.analyzeExpressionPass1(this, node);
+            errorCount += analyzer.inTreeOrderAnalyzeExpressionPass1(this, node);
         }
         assert(state == State.pass1Started, "codebug");
         state = State.pass1Done;
+        verbose(0, "analyzePass1 '%s' Done", filename);
+        //dumpSymbols();
         return errorCount;
     }
 
-    uint analyzePass2(Flag!"runContext" runContext)
+    uint analyzePass2()
     {
         if (state >= State.pass2Started)
             return 0;
@@ -154,7 +148,7 @@ class Module : IScope
             uint totalErrorCount = 0;
             foreach (i; 0 .. semanticNodes.length)
             {
-                const errorCount = analyzer.analyzeExpressionPass2(this, &semanticNodes[i], AnalyzeOptions.none);
+                const errorCount = analyzer.inTreeOrderAnalyzeExpressionPass2(this, &semanticNodes[i], AnalyzeOptions.none);
                 if (errorCount == 0)
                     totalErrorCount += analyzer.enforceValidStatement(this, semanticNodes[i]);
                 else
@@ -222,41 +216,60 @@ class Module : IScope
         return filename;
     }
     //
-    // IDotQualifiable Functions
+    // IDotQualifiable methods
     //
-    SemanticNode tryGetUnqualified(string symbol)
+    OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
     {
         auto errorCount = analyzePass1();
         if (errorCount > 0)
-        {
-            // ???
-        }
+            return OptionalNodeResult(errorCount);
         if (state < State.pass1Done)
         {
+            // TODO: print error and return it
             from!"std.stdio".writefln("PossibleError: circular reference?");
             throw quit;
         }
 
-        return symbolTable.tryGet(symbol);
+        return OptionalNodeResult(symbolTable.tryGet(symbol));
     }
     void scopeDescriptionFormatter(StringSink sink) const
     {
         sink("module ");
-        sink(importName);
+        if (importName)
+            sink(importName);
+        else
+            sink(filename);
     }
     void dumpSymbols() const
     {
         symbolTable.dump();
     }
     //
-    // IReadonlyScope Functions
+    // IReadonlyScope methods
     //
     @property final inout(IReadonlyScope) getParent() inout { return cast(inout(IReadonlyScope)) UniversalScope.instance; }
     @property final inout(Module) asModule() inout { return this; }
     @property final inout(IScope) asWriteable() inout { return this; }
     @property final inout(JumpBlock) asJumpBlock() inout { return null; }
+    final uint prepareForChildAnalyzePass2()
+    {
+        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        // TODO: maybe we need to also make sure that it is analyzed pass2?
+        // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        {
+            auto errorCount = analyzePass1();
+            if (errorCount > 0)
+                return errorCount;
+        }
+        if (state < State.pass1Done)
+        {
+            return errorfUint(this, "possible circular reference?");
+            return 1;
+        }
+        return 0;
+    }
     //
-    // IScope Functions
+    // IScope methods
     //
     void add(const(string) symbol, SemanticNode node)
     {
@@ -345,16 +358,16 @@ Module loadImport(string importName)
         }
         throw quit;
     }
-    return loadModuleFromFileCommon(moduleFileName, No.rootCodeIsUsed, importName);
+    return loadModuleFromFileCommon(moduleFileName, No.isEntryModule, importName);
 }
 
 // Assumption: the caller has ALREADY checked if filename exists
-Module loadModuleFromFilename(string filename, Flag!"rootCodeIsUsed" rootCodeIsUsed, string importName)
+Module loadModuleFromFilename(string filename, Flag!"isEntryModule" isEntryModule, string importName)
 {
-    return loadModuleFromFileCommon(filename, rootCodeIsUsed, importName);
+    return loadModuleFromFileCommon(filename, isEntryModule, importName);
 }
 
-private Module loadModuleFromFileCommon(string filename, Flag!"rootCodeIsUsed" rootCodeIsUsed, string importName)
+private Module loadModuleFromFileCommon(string filename, Flag!"isEntryModule" isEntryModule, string importName)
 {
     // make sure that this file has not already been loaded
     foreach (module_; global.modules.data)
@@ -375,7 +388,7 @@ private Module loadModuleFromFileCommon(string filename, Flag!"rootCodeIsUsed" r
             return module_;
         }
     }
-    auto newModule = new Module(filename, rootCodeIsUsed, importName);
+    auto newModule = new Module(filename, isEntryModule, importName);
     global.modules.put(newModule);
     return newModule;
 }
@@ -391,6 +404,8 @@ struct BuiltinSymbol
         immutable BuiltinSymbol("u32", UnsignedFixedWidthType!32.instance),
         immutable BuiltinSymbol("leftIsLess", builtin.leftIsLessFunction.instance),
         immutable BuiltinSymbol("length", builtin.lengthFunction.instance),
+        immutable BuiltinSymbol("alloca", builtin.allocaFunction.instance),
+        immutable BuiltinSymbol("ptrTo", builtin.ptrToFunction.instance),
     ];
 }
 
@@ -398,17 +413,17 @@ class UniversalScope : IReadonlyScope
 {
     mixin singleton;
     //
-    // IDotQualifiable Functions
+    // IDotQualifiable methods
     //
-    SemanticNode tryGetUnqualified(string symbol)
+    OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
     {
         //from!"std.stdio".writefln("Universal.tryGetUnqualified(\"%s\")", symbol);
         foreach (ref builtinSymbol; BuiltinSymbol.values)
         {
             if (builtinSymbol.symbol == symbol)
-                return builtinSymbol.node.unconst;
+                return OptionalNodeResult(builtinSymbol.node.unconst);
         }
-        return null;
+        return OptionalNodeResult(null);
     }
     void scopeDescriptionFormatter(StringSink sink) const { sink("global scope"); }
     void dumpSymbols() const
@@ -416,11 +431,12 @@ class UniversalScope : IReadonlyScope
         assert(0, "UniversalScope.dumpSymbols not impelemented");
     }
     //
-    // IReadonlyScope Functions
+    // IReadonlyScope methods
     //
     @property final inout(IReadonlyScope) getParent() inout { return null; }
     // TODO: probably return a pseudo universal-module
     @property final inout(Module) asModule() inout { assert(0, "not implemented"); }
     @property final inout(IScope) asWriteable() inout { return null; }
     @property final inout(JumpBlock) asJumpBlock() inout { return null; }
+    final uint prepareForChildAnalyzePass2() { return 0; }
 }
