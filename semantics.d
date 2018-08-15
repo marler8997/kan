@@ -20,7 +20,8 @@ import syntax : SyntaxNodeType, SyntaxNode, KeywordType, KeywordSyntaxNode, Stri
 import types;// : Type, VoidType, NumberType, StringType, ModuleType;
 import symtab : SymbolTable;
 import mod : Module;
-import builtin : tryFindSemanticFunction;
+static import builtin;
+import builtin : tryGetSemanticFunctionFor;
 import analyzer : analyzeUserDefinedFunctionPass2;
 static import interpreter;
 
@@ -29,6 +30,8 @@ static import interpreter;
 //
 interface IHighLevelVisitor
 {
+    void visit(SymbolTableEntry);
+    void visit(SetReturnNode);
     void visit(Tuple);
     void visit(Symbol);
     void visit(RegularCall);
@@ -43,6 +46,8 @@ interface IHighLevelVisitor
 }
 class HighLevelVisitorIgnoreByDefault : IHighLevelVisitor
 {
+    void visit(SymbolTableEntry) { }
+    void visit(SetReturnNode) { }
     void visit(Tuple) { }
     void visit(Symbol) { }
     void visit(RegularCall) { }
@@ -57,17 +62,20 @@ class HighLevelVisitorIgnoreByDefault : IHighLevelVisitor
 }
 class HighLevelVisitorNotImplementedByDefault : IHighLevelVisitor
 {
-    void visit(Tuple) { assert(0, "Tuple not implemented"); }
-    void visit(Symbol) { assert(0, "Symbol not implemented"); }
-    void visit(RegularCall) { assert(0, "RegularCall not implemented"); }
-    void visit(SemanticCall) { assert(0, "SemanticCall not implemented"); }
-    void visit(BuiltinType) { assert(0, "BuiltinType not implemented"); }
-    void visit(SemanticFunction) { assert(0, "SemanticFunction not implemented"); }
-    void visit(RegularFunction) { assert(0, "RegularFunction not implemented"); }
-    void visit(Value) { assert(0, "Value not implemented"); }
-    //void visit(IType) { assert(0, "IType not implemented"); }
-    //void visit(FunctionParameter) { assert(0, "FunctionParameter not implemented"); }
-    void visit(LazyNode) { assert(0, "LazyNode not implemented"); }
+    import std.format : format;
+    void visit(SymbolTableEntry node) { assert(0, format("%sSymbolTableEntry not implemented", node.formatLocation)); }
+    void visit(SetReturnNode node) { assert(0, format("%sSetReturnNode not implemented", node.formatLocation)); }
+    void visit(Tuple node) { assert(0, format("%sTuple not implemented", node.formatLocation)); }
+    void visit(Symbol node) { assert(0, format("%sSymbol not implemented", node.formatLocation)); }
+    void visit(RegularCall node) { assert(0, format("%sRegularCall not implemented", node.formatLocation)); }
+    void visit(SemanticCall node) { assert(0, format("%sSemanticCall not implemented", node.formatLocation)); }
+    void visit(BuiltinType node) { assert(0, format("%sBuiltinType not implemented", node.formatLocation)); }
+    void visit(SemanticFunction node) { assert(0, format("%sSemanticFunction not implemented", node.formatLocation)); }
+    void visit(RegularFunction node) { assert(0, format("%sRegularFunction not implemented", node.formatLocation)); }
+    void visit(Value node) { assert(0, format("%sValue not implemented", node.formatLocation)); }
+    //void visit(IType node) { assert(0, format("%sIType not implemented", node.formatLocation)); }
+    //void visit(FunctionParameter node) { assert(0, format("%sFunctionParameter not implemented", node.formatLocation)); }
+    void visit(LazyNode node) { assert(0, format("%sLazyNode not implemented", node.formatLocation)); }
 }
 
 
@@ -97,12 +105,11 @@ SemanticNode newSemanticNode(const(SyntaxNode)* syntaxNode)
     case SyntaxNodeType.keyword:
         final switch(syntaxNode.keyword.type)
         {
-        //case KeywordType.void_ : return new VoidFromKeyword(&syntaxNode.keyword);
         case KeywordType.void_ : return new VoidKeyword(&syntaxNode.keyword);
             break;
-        case KeywordType.false_: return new Bool(&syntaxNode.keyword, false);
+        case KeywordType.false_: return new Bool(syntaxNode, false);
             break;
-        case KeywordType.true_ : return new Bool(&syntaxNode.keyword, true);
+        case KeywordType.true_ : return new Bool(syntaxNode, true);
             break;
         }
     case SyntaxNodeType.symbol:
@@ -111,14 +118,14 @@ SemanticNode newSemanticNode(const(SyntaxNode)* syntaxNode)
         return new TupleFromSyntaxNode(&syntaxNode.tuple, newSemanticNodes(syntaxNode.tuple.nodes));
     case SyntaxNodeType.call:
         {
-            auto function_ = tryFindSemanticFunction(&syntaxNode.call);
-            if (function_ !is null)
+            auto call = tryGetSemanticFunctionFor(&syntaxNode.call);
+            if (call !is null)
             {
-                return new SemanticCall(syntaxNode, function_, syntaxNode.call.arguments.unconst);
+                return call;
             }
         }
         return new RegularCall(syntaxNode, syntaxNode.call.functionName,
-            syntaxNode.call.arguments.unconst, newSemanticNodes(syntaxNode.call.arguments));
+            /*syntaxNode.call.arguments.unconst, */newSemanticNodes(syntaxNode.call.arguments));
     }
 }
 
@@ -140,27 +147,27 @@ LocationFormatter formatLocation(immutable(char)* source)
 pragma(inline)
 LocationFormatter formatLocation(const(SyntaxNode)* node) { return formatLocation(node.source.ptr); }
 
-enum AnalyzeState
-{
-    pass1Started,
-    pass1Done,
-    pass2Started,
-    pass2Done,
-}
-
 class SemanticNode : IDotQualifiable
 {
-    private AnalyzeState state;
     abstract void accept(IHighLevelVisitor visitor);
 
     final LocationFormatter formatLocation() const
     {
+        auto syntaxNode = getSyntaxNode();
         return .formatLocation(getSyntaxNode.source.ptr);
     }
 
     abstract const(SyntaxNode)* getSyntaxNode() const;
+    abstract IType getType() const;
     abstract void valueFormatter(StringSink sink) const;
     abstract void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const;
+    //
+    // Object methods
+    //
+    void toString(scope void delegate(in char[]) sink) const
+    {
+        sink((cast(Object)super).toString());
+    }
 }
 DelegateFormatter formatValue(const(SemanticNode)* node)
 {
@@ -183,6 +190,7 @@ class Tuple : SemanticNode
     // SemanticNode methods
     //
     mixin SemanticNodeMixin;
+    final override IType getType() const { assert(0, "not implemented"); }
 }
 class TupleFromSyntaxNode : Tuple
 {
@@ -208,39 +216,6 @@ class TupleFromSyntaxNode : Tuple
     }
 }
 
-/+
-class Void : SemanticNode
-{
-    mixin singleton!(No.ctor);
-    protected this() { }
-    protected this() immutable { }
-
-    //
-    // IDotQualifiable methods
-    //
-    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
-    void scopeDescriptionFormatter(StringSink sink) const { sink("void"); }
-    //
-    // SemanticNode methods
-    //
-    mixin SemanticNodeMixin;
-    override const(SyntaxNode)* getSyntaxNode() const { assert(0, "not implemented"); }
-    final override void valueFormatter(StringSink sink) const { sink("<void>"); }
-}
-class VoidFromKeyword : Void
-{
-    const(KeywordSyntaxNode)* syntaxNode;
-    this(const(KeywordSyntaxNode)* syntaxNode)
-    {
-        this.syntaxNode = syntaxNode;
-    }
-    //
-    // SemanticNode methods
-    //
-    final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode.base; }
-}
-+/
-
 /**
 A VoidKeyword node represents an actual 'void' syntax node.
 It can represent a void value, or a void type, or anything else that
@@ -257,7 +232,7 @@ class VoidKeyword : Value
     //
     // Value methods
     //
-    final override IType getType() const { assert(0, "not implemented"); }
+    final override IType tryAsType() const { return VoidType.instance.unconst; }
     //
     // IDotQualifiable methods
     //
@@ -267,6 +242,7 @@ class VoidKeyword : Value
     // SemanticNode methods
     //
     override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode.base; }
+    final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { sink("<void>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -283,7 +259,7 @@ class VoidValue : Value
     //
     // Value methods
     //
-    final override IType getType() const { return VoidType.instance.unconst; }
+    final override IType tryAsType() const { return null; }
     //
     // IDotQualifiable methods
     //
@@ -293,12 +269,86 @@ class VoidValue : Value
     // SemanticNode methods
     //
     override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { return VoidType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { sink("<void>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
         assert(0, "not implemented");
     }
 }
+
+class SymbolTableEntry : SemanticNode
+{
+    //IScope setScope;
+    string name;
+    SemanticNode currentNode;
+    enum State
+    {
+        initial,
+        pass2Started,
+        pass2Done,
+        failed,
+    }
+    State state;
+    this(/*IScope setScope, */string name, SemanticNode currentNode)
+    {
+        //this.setScope = setScope;
+        this.name = name;
+        this.currentNode = currentNode;
+    }
+    //
+    // IDotQualifiable methods
+    //
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
+    { return currentNode.tryGetUnqualified(symbol, fromInside); }
+    void scopeDescriptionFormatter(StringSink sink) const { currentNode.scopeDescriptionFormatter(sink); }
+    //
+    // SemanticNode methods
+    //
+    mixin SemanticNodeMixin;
+    override const(SyntaxNode)* getSyntaxNode() const { return currentNode.getSyntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
+    final override void valueFormatter(StringSink sink) const { currentNode.valueFormatter(sink); }
+    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
+    {
+        currentNode.printFormatter(sink, interpreter);
+    }
+    override void toString(scope void delegate(in char[]) sink) const
+    {
+        formattedWrite(sink, "symtab[%s:%s]", name, currentNode);
+    }
+}
+
+class SetReturnNode : SemanticNode
+{
+    builtin.setCall set;
+    this(builtin.setCall set)
+    {
+        this.set = set;
+    }
+    //
+    // IDotQualifiable methods
+    //
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
+    { return set.symbolTableEntry.currentNode.tryGetUnqualified(symbol, fromInside); }
+    void scopeDescriptionFormatter(StringSink sink) const { set.symbolTableEntry.currentNode.scopeDescriptionFormatter(sink); }
+    //
+    // SemanticNode methods
+    //
+    mixin SemanticNodeMixin;
+    override const(SyntaxNode)* getSyntaxNode() const { return set.symbolTableEntry.currentNode.getSyntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
+    final override void valueFormatter(StringSink sink) const { set.symbolTableEntry.currentNode.valueFormatter(sink); }
+    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
+    {
+        set.symbolTableEntry.currentNode.printFormatter(sink, interpreter);
+    }
+    override void toString(scope void delegate(in char[]) sink) const
+    {
+        set.symbolTableEntry.toString(sink);
+    }
+}
+
 
 class Symbol : SemanticNode
 {
@@ -311,6 +361,7 @@ class Symbol : SemanticNode
     // SemanticNode methods
     //
     mixin SemanticNodeMixin;
+    final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { formattedWrite(sink, "<symbol:%s>", value); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -362,17 +413,14 @@ DelegateFormatter formatNameForMessage(T)(const(T) obj)
 
 class SemanticCall : Call
 {
-    private const(SyntaxNode)* syntaxNode;
-    SemanticFunction function_;
+    protected const(SyntaxNode)* syntaxNode;
     uarray!SyntaxNode syntaxArgs;
-    uarray!SemanticNode semanticArgs;
     void* funcData; // Data that the function may need to associate with the call
-    this(const(SyntaxNode)* syntaxNode, SemanticFunction function_, uarray!SyntaxNode syntaxArgs)
+    this(const(SyntaxNode)* syntaxNode, uarray!SyntaxNode syntaxArgs)
     {
         this.syntaxNode = syntaxNode;
-        this.function_ = function_;
         this.syntaxArgs = syntaxArgs;
-
+        /+
         auto nodeCount = function_.semanticNodeBufferCountFor(syntaxArgs.length);
         this.semanticArgs = new SemanticNode[nodeCount].toUarray;
         auto initializedCount = 0;
@@ -387,11 +435,38 @@ class SemanticCall : Call
             // TODO: initialize to a void placeholder value
             assert(0, "not implemented");
         }
+        +/
     }
+    abstract string getFunctionName() const;
     final void nameForErrorMessageFormatter(StringSink sink) const
     {
-        sink(function_.nameForMessages);
+        //sink(function_.nameForMessages);
+        sink(getFunctionName);
     }
+
+    // Assumption: this function should always be called before inTreeOrderInterpretPass1
+    abstract uint inTreeOrderInterpretPass1(IScope scope_);
+    // Assumption: this function will ONLY be called after inTreeOrderInterpretPass1
+    // Assumption: this function will only be called once at most
+    // Assumption: this function will not be called if tryInterpretToRegularFunction is called
+    abstract NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const;
+    // Assumption: this function will ONLY be called after inTreeOrderInterpretPass1
+    // Assumption: this function will only be called once at most
+    // Assumption: this function will not be called if inTreeOrderInterpretPass2 is called
+    OptionalResultOrError!RegularFunction tryInterpretToRegularFunction()
+    {
+        return OptionalResultOrError!RegularFunction(0);
+    }
+    final ResultOrError!RegularFunction interpretToRegularFunction(LocationFormatter errorLocation)
+    {
+        auto result = tryInterpretToRegularFunction();
+        if (result.errorCount > 0)
+            return ResultOrError!RegularFunction(result.errorCount);
+        if (result.value is null)
+            return errorfResultOrError!(RegularFunction)(errorLocation, "%s is not a function", this);
+        return ResultOrError!RegularFunction(result.value);
+    }
+
 
     //
     // IDotQualifiable methods
@@ -402,6 +477,29 @@ class SemanticCall : Call
     //
     mixin SemanticNodeMixin;
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
+    //
+    //
+    override void toString(scope void delegate(in char[]) sink) const
+    {
+        formattedWrite(sink, "SemanticCall to '%s'", getFunctionName);
+    }
+}
+class BuiltinSemanticCall : SemanticCall
+{
+    string functionName;
+    this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
+    {
+        super(syntaxNode, syntaxArgs);
+        this.functionName = functionName;
+    }
+    //
+    // SemanticCall methods
+    //
+    final override string getFunctionName() const
+    {
+        return functionName;
+    }
 }
 
 /**
@@ -410,22 +508,22 @@ A RegularCall is a call to a regular function (i.e. not a "semantic function").
 class RegularCall : Call
 {
     const(SyntaxNode)* syntaxNode;
-    uarray!SemanticNode arguments; // TODO: rename to semanticArgs
+    uarray!SemanticNode semanticArgs;
     string functionNameToResolve;
     RegularFunction function_;
     this(const(SyntaxNode)* syntaxNode, string functionNameToResolve,
-        uarray!SyntaxNode syntaxArgs, uarray!SemanticNode arguments)
+        /*uarray!SyntaxNode syntaxArgs, */uarray!SemanticNode semanticArgs)
     {
         this.syntaxNode = syntaxNode;
         this.functionNameToResolve = functionNameToResolve;
-        this.arguments = arguments;
+        this.semanticArgs = semanticArgs;
     }
     this(const(SyntaxNode)* syntaxNode, RegularFunction function_,
-        uarray!SyntaxNode syntaxArgs, uarray!SemanticNode arguments)
+        /*uarray!SyntaxNode syntaxArgs, */uarray!SemanticNode semanticArgs)
     {
         this.syntaxNode = syntaxNode;
         this.function_ = function_;
-        this.arguments = arguments;
+        this.semanticArgs = semanticArgs;
     }
     //
     // IDotQualifiable methods
@@ -436,12 +534,24 @@ class RegularCall : Call
     //
     mixin SemanticNodeMixin;
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
+    //
+    // Objecte methods
+    //
+    override void toString(scope void delegate(in char[]) sink) const
+    {
+        if (functionNameToResolve)
+            formattedWrite(sink, "RegularCallTo(%s)", functionNameToResolve);
+        else
+            formattedWrite(sink, "RegularCall");
+    }
 }
 
 
 class Value : SemanticNode
 {
-    abstract IType getType() const;
+    /** Try to interpret the node as a type */
+    abstract IType tryAsType() const;
     //
     // SemanticNode methods
     //
@@ -450,9 +560,9 @@ class Value : SemanticNode
 
 class Bool : Value
 {
-    const(KeywordSyntaxNode)* syntaxNode;
+    const(SyntaxNode)* syntaxNode;
     bool value;
-    this(const(KeywordSyntaxNode)* syntaxNode, bool value)
+    this(const(SyntaxNode)* syntaxNode, bool value)
     {
         this.syntaxNode = syntaxNode;
         this.value = value;
@@ -460,7 +570,7 @@ class Bool : Value
     //
     // Value methods
     //
-    final override IType getType() const { return BoolType.instance.unconst; }
+    final override IType tryAsType() const { return null; }
     //
     // IDotQualifiable methods
     //
@@ -469,15 +579,21 @@ class Bool : Value
     //
     // SemanticNode methods
     //
-    final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode.base; }
+    final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { return BoolType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { sink(value ? "true" : "false"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
         sink(value ? "true" : "false");
     }
 }
+
 class Number : Value
 {
+    //
+    // Value methods
+    //
+    final override IType tryAsType() const { return null; }
     //
     // IDotQualifiable methods
     //
@@ -492,13 +608,10 @@ class NumberLiteral : Number
         this.syntaxNode = syntaxNode;
     }
     //
-    // Value methods
-    //
-    final override IType getType() const { return NumberLiteralType.instance.unconst; }
-    //
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { return NumberLiteralType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { sink(syntaxNode.source); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -513,6 +626,10 @@ class StringLiteral : Value
         this.syntaxNode = syntaxNode;
     }
     //
+    // Value methods
+    //
+    final override IType tryAsType() const { return null; }
+    //
     // IDotQualifiable methods
     //
     final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
@@ -521,15 +638,12 @@ class StringLiteral : Value
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode.base; }
+    final override IType getType() const { return StringLiteralType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { sink(syntaxNode.str); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
         sink(syntaxNode.str);
     }
-    //
-    // Value methods
-    //
-    final override IType getType() const { return StringLiteralType.instance.unconst; }
 }
 class FlagValue : Value
 {
@@ -541,6 +655,10 @@ class FlagValue : Value
         this.name = name;
     }
     //
+    // Value methods
+    //
+    final override IType tryAsType() const { return null; }
+    //
     // IDotQualifiable methods
     //
     final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
@@ -549,15 +667,12 @@ class FlagValue : Value
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { return FlagType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { formattedWrite(sink, "<flag:%s>", name); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
         formattedWrite(sink, "flag(%s)", name);
     }
-    //
-    // Value methods
-    //
-    final override IType getType() const { return FlagType.instance.unconst; }
 }
 class EnumValue : Value
 {
@@ -571,6 +686,10 @@ class EnumValue : Value
         this.name = name;
     }
     //
+    // Value methods
+    //
+    final override IType tryAsType() const { return null; }
+    //
     // IDotQualifiable methods
     //
     final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
@@ -579,15 +698,12 @@ class EnumValue : Value
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { return type.unconst; }
     final override void valueFormatter(StringSink sink) const { sink(name); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
         sink(name);
     }
-    //
-    // Value methods
-    //
-    final override IType getType() const { return type.unconst; }
 }
 
 class BuiltinType : SemanticNode, IType
@@ -607,6 +723,7 @@ class BuiltinType : SemanticNode, IType
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { assert(0, "not implemented"); }
+    final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { sink("<type>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -632,7 +749,11 @@ class FunctionParameter : Value
     //
     // Value methods
     //
-    final override IType getType() const { assert(0, "not implemented"); }
+    final override IType tryAsType() const
+    {
+        // Maybe a function parameter could be an alias to a type?
+        assert(0, "not implemented");
+    }
     //
     // IDotQualifiable methods
     //
@@ -642,10 +763,11 @@ class FunctionParameter : Value
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { sink("<func-param>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
-        interpreter.blockStack.current.args[paramIndex].printFormatter(sink, interpreter);
+        interpreter.currentBlock.args[paramIndex].printFormatter(sink, interpreter);
     }
 }
 
@@ -693,6 +815,10 @@ class ImportedModule : Value
         this.mod = mod;
     }
     //
+    // Value methods
+    //
+    final override IType tryAsType() const { return null; }
+    //
     // IDotQualifiable methods
     //
     final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
@@ -702,15 +828,16 @@ class ImportedModule : Value
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return importSyntaxNode; }
+    final override IType getType() const { return ModuleType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { formattedWrite(sink, "<module:%s>", mod.importName); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
         assert(0, "codebug: ImportedModule nodes shouldn't exist at interpret time");
     }
-    //
-    // Value methods
-    //
-    final override IType getType() const { return ModuleType.instance.unconst; }
+    override void toString(scope void delegate(in char[]) sink) const
+    {
+        formattedWrite(sink, "importedModule(%s)", mod);
+    }
 }
 
 T tryAs(T)(SemanticNode func)
@@ -923,8 +1050,16 @@ interface IScope : IReadonlyScope
     // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     // TODO: Maybe add should return a reference to the symbol entry in the symbol
     //       table in case the caller ever wants to update it
-    void add(const(string) symbol, SemanticNode node);
-    void evaluated(const(string) symbol, SemanticNode node);
+    SymbolTableEntry tryAdd(string symbol, SemanticNode node);
+    //void add(const(string) symbol, SemanticNode node);
+    //void evaluated(const(string) symbol, SemanticNode node);
+}
+SymbolTableEntry tryAddOrPrintError(IScope scope_, string symbol, SemanticNode node, LocationFormatter errorLocation)
+{
+    auto result = scope_.tryAdd(symbol, node);
+    if (!result)
+        errorf(errorLocation, "scope of %s already has symbol '%s'", scope_.formatScopeDescription, symbol);
+    return result;
 }
 
 struct Parameter
@@ -1127,6 +1262,198 @@ struct RegularFunctionInterface
     }
 }
 
+/**
+A regular function is a function that can be run at compile-time or runtime, but not
+at "analyze-time" (i.e. it is not a "semantic function").
+*/
+class RegularFunction : SemanticNode
+{
+    IReadonlyScope containingScope;
+    this(IReadonlyScope containingScope)
+    {
+        this.containingScope = containingScope;
+    }
+    this(immutable(IReadonlyScope) containingScope) immutable
+    {
+        this.containingScope = containingScope;
+    }
+    abstract passfail addAndCheckCall(RegularCall runtimeCall);
+    //
+    // SemanticNode methods
+    //
+    mixin SemanticNodeMixin;
+}
+
+class BuiltinRegularFunction : RegularFunction
+{
+    string nameForMessages;
+    RegularFunctionInterface interface_;
+    uint callCount;
+    this(string nameForMessages, immutable(RegularFunctionInterface) interface_) immutable
+    {
+        super(Module.builtin);
+        this.nameForMessages = nameForMessages;
+        this.interface_ = interface_;
+    }
+
+    // TODO: This should probably take an array of arguments rather than a RegularCall
+    abstract SemanticNode interpret(interpreter.Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs);
+    //
+    // RegularFunction methods
+    //
+    final override passfail addAndCheckCall(RegularCall runtimeCall)
+    {
+        callCount++;
+        return passfail.pass;
+    }
+    //
+    // IDotQualifiable methods
+    //
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
+    void scopeDescriptionFormatter(StringSink sink) const { sink("builtin function"); }
+    //
+    // SemanticNode methods
+    //
+    protected final override const(SyntaxNode)* getSyntaxNode() const { assert(0, "not implemented"); }
+    final override IType getType() const { assert(0, "not implemented"); }
+    final override void valueFormatter(StringSink sink) const { sink("<builtin-function>"); }
+    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
+    {
+        sink("<builtin-function>");
+    }
+}
+
+class UserDefinedFunction : RegularFunction, IScope
+{
+    const(SyntaxNode)* originalDefinitionNode;
+    uarray!SyntaxNode defNodes;
+    Builder!(RegularCall, GCDoubler!8) calls;
+    enum State
+    {
+        initial,
+        pass2Started,
+        pass2Done,
+        analyzeFailed,
+    }
+    State state;
+    IType returnType;
+    uarray!FunctionParameter params;
+    uarray!SemanticNode bodyNodes;
+    SymbolTable bodySymbolTable;
+
+    this(IReadonlyScope containingScope, const(SyntaxNode)* originalDefinitionNode, uarray!SyntaxNode defNodes)
+    {
+        super(containingScope);
+        this.originalDefinitionNode = originalDefinitionNode;
+        this.defNodes = defNodes;
+    }
+
+    final override passfail addAndCheckCall(RegularCall runtimeCall)
+    {
+        // Only need to add if I'm going to perform optimization later
+        calls.append(runtimeCall);
+
+        if (state == State.initial)
+        {
+            state = State.pass2Started;
+            uint errorCount = analyzeUserDefinedFunctionPass2(this);
+            assert(state == State.pass2Started, "codebug");
+            state = (errorCount > 0) ? State.analyzeFailed : State.pass2Done;
+        }
+        if (state == State.analyzeFailed)
+            return passfail.fail;
+        assert(state == State.pass2Done, "codebug");
+
+        from!"std.stdio".writefln("WARNING: %scheck regular call arguments not implemented",
+            runtimeCall.formatLocation());
+        return passfail.pass;
+    }
+
+    /*
+    final override void interpret(RegularCall call)
+        in { assert(codeAnalyzedCount == rawCode.length); } do
+    {
+        interpreter.interpretRegularCall(this, call);
+    }
+    */
+    //
+    // IDotQualifiable methods
+    //
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
+    {
+        if (fromInside)
+        {
+            assert(state == State.pass2Started, "codebug?");
+            return OptionalNodeResult(bodySymbolTable.tryGet(symbol));
+        }
+        else
+        {
+            assert(0, "not implemented");
+        }
+    }
+    void scopeDescriptionFormatter(StringSink sink) const { sink("function"); }
+    void dumpSymbols() const
+    {
+        bodySymbolTable.dump();
+    }
+    //
+    // SemanticNode methods
+    //
+    protected final override const(SyntaxNode)* getSyntaxNode() const { return originalDefinitionNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
+    final override void valueFormatter(StringSink sink) const { sink("<function>"); }
+    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
+    {
+        sink("<user-defined-function>");
+    }
+    //
+    // IReadonlyScope methods
+    //
+    @property final inout(IReadonlyScope) getParent() inout { return containingScope; }
+    @property final inout(Module) asModule() inout { return null; }
+    @property final inout(IScope) asWriteable() inout { return this; }
+    @property final inout(JumpBlock) asJumpBlock() inout { return null; }
+    final uint prepareForChildAnalyzePass2()
+    {
+        /*
+        I think this could happen if you have a call to a function
+        that is defined inside this function. i.e.
+        function(auto {} {
+            set(foo function(auto {} {}))
+            foo() // when this function is analyzed, it should call this function for
+                  // the parent function scope
+        })
+        */
+        // I don't actually think we need to do anything here, because if we are analyzing
+        // a call to a child function, then it must mean we have already done pass1?  Note
+        // that this also means that you cannot call a funciton inside a function outside
+        // that function.  This makes sense, if you want to call it outside the funciton, then
+        // define it outside the function.
+        assert(state == State.pass2Started, "codebug?");
+        return 0;
+    }
+    //
+    // IScope methods
+    //
+    SymbolTableEntry tryAdd(string symbol, SemanticNode node)
+    {
+        auto result = bodySymbolTable.tryAdd(symbol, node);
+        return result.newEntryAdded ? result.entry : null;
+    }
+    /+
+    void evaluated(const(string) symbol, SemanticNode node)
+    {
+        if (bodySymbolTable.update(symbol, node).failed)
+        {
+            from!"std.stdio".writefln("Error: CodeBug: attempted to update symbol '%s' but it does not exist!", symbol);
+            throw quit;
+        }
+    }
+    +/
+}
+
+
+/+
 struct NumberedSemanticArgType
 {
     ushort count;
@@ -1148,19 +1475,23 @@ pragma(inline) bool needsSemanticNode(const SemanticArgType type)
 {
     return type != SemanticArgType.syntaxNode;
 }
++/
 
 class SemanticFunction : SemanticNode
 {
     string nameForMessages;
+    /+
     SemanticArgType defaultArgType;
     const(NumberedSemanticArgType)[] firstArgTypes;
     // Total number of arguments in firstArgTypes
     private size_t firstArgTypesCount;
     // Saves the number of nodes needed from firstArgTypes
     private size_t firstArgsThatNeedSemanticNodesCount;
-    this(string nameForMessages, SemanticArgType defaultArgType, immutable(NumberedSemanticArgType)[] firstArgTypes) immutable
+    +/
+    this(string nameForMessages/*, SemanticArgType defaultArgType, immutable(NumberedSemanticArgType)[] firstArgTypes*/) immutable
     {
         this.nameForMessages = nameForMessages;
+        /+
         this.defaultArgType = defaultArgType;
         this.firstArgTypes = firstArgTypes;
         size_t countArgs = 0;
@@ -1176,8 +1507,10 @@ class SemanticFunction : SemanticNode
         }
         this.firstArgTypesCount = countArgs;
         this.firstArgsThatNeedSemanticNodesCount = countSemanticNodes;
+        +/
     }
 
+    /+
     // Returns the number of nodes that need to be allocated for the call
     size_t semanticNodeBufferCountFor(size_t syntaxNodeCount) const
     {
@@ -1225,7 +1558,6 @@ class SemanticFunction : SemanticNode
     {
         return NodeIndicesRange(this, syntaxNodeCount);
     }
-
     /**
     Note, it is important to know during analysis if a semantic function can add symbols because
     symbol resolution cannot ascend past a scope until all symbols in that scope have been added.
@@ -1235,13 +1567,16 @@ class SemanticFunction : SemanticNode
     {
         return false;
     }
+    +/
     abstract uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call);
     abstract NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call/*, Flag!"used" used*/) const;
 
+    /+
     final void printErrorsForInterpret(IReadonlyScope scope_, SemanticCall call, Flag!"used" used) const
     {
         errorf(call.formatLocation(), "failed to interpret function '%s' (TODO: implement printing more details)", call);
     }
+    +/
     final auto checkAndGet(uarray!SyntaxNode args) inout
     {
         // this method provides an opportunity to check the call
@@ -1278,13 +1613,15 @@ class SemanticFunction : SemanticNode
     //
     // IDotQualifiable methods
     //
-    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
+    { assert(0, "not implemented or maybe code bug?"); }
     void scopeDescriptionFormatter(StringSink sink) const { sink("semantic function"); }
     //
     // SemanticNode methods
     //
     mixin SemanticNodeMixin;
     override const(SyntaxNode)* getSyntaxNode() const { assert(0, "not implemented"); }
+    final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { sink("<semantic-function>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -1292,8 +1629,10 @@ class SemanticFunction : SemanticNode
     }
 }
 
+/+
 struct NodeIndices
 {
+    Flag!"fullyAnalyzed" fullyAnalyzed;
     uint syntaxNodeIndex;
     uint semanticNodeIndex;
 }
@@ -1570,197 +1909,7 @@ unittest
         }
     }
 }
-
-/**
-A regular function is a function that can be run at compile-time or runtime, but not
-at "analyze-time" (i.e. it is not a "semantic function").
-*/
-class RegularFunction : SemanticNode
-{
-    IReadonlyScope containingScope;
-    this(IReadonlyScope containingScope)
-    {
-        this.containingScope = containingScope;
-    }
-    this(immutable(IReadonlyScope) containingScope) immutable
-    {
-        this.containingScope = containingScope;
-    }
-    abstract passfail addAndCheckCall(RegularCall runtimeCall);
-    //
-    // SemanticNode methods
-    //
-    mixin SemanticNodeMixin;
-}
-
-class BuiltinRegularFunction : RegularFunction
-{
-    string nameForMessages;
-    RegularFunctionInterface interface_;
-    uint callCount;
-    this(string nameForMessages, immutable(RegularFunctionInterface) interface_) immutable
-    {
-        super(Module.builtin);
-        this.nameForMessages = nameForMessages;
-        this.interface_ = interface_;
-    }
-
-    // TODO: This should probably take an array of arguments rather than a RegularCall
-    abstract void interpret(interpreter.Interpreter* interpreter, RegularCall call);
-    //
-    // RegularFunction methods
-    //
-    final override passfail addAndCheckCall(RegularCall runtimeCall)
-    {
-        callCount++;
-        return passfail.pass;
-    }
-    //
-    // IDotQualifiable methods
-    //
-    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
-    void scopeDescriptionFormatter(StringSink sink) const { sink("builtin function"); }
-    //
-    // SemanticNode methods
-    //
-    protected final override const(SyntaxNode)* getSyntaxNode() const { assert(0, "not implemented"); }
-    final override void valueFormatter(StringSink sink) const { sink("<builtin-function>"); }
-    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
-    {
-        sink("<builtin-function>");
-    }
-}
-
-class UserDefinedFunction : RegularFunction, IScope
-{
-    const(SyntaxNode)* originalDefinitionNode;
-    uarray!SyntaxNode defNodes;
-    Builder!(RegularCall, GCDoubler!8) calls;
-    enum State
-    {
-        initial,
-        pass2Started,
-        pass2Done,
-        analyzeFailed,
-    }
-    State state;
-    SemanticNode returnType;
-    uarray!FunctionParameter params;
-    uarray!SemanticNode bodyNodes;
-    SymbolTable bodySymbolTable;
-
-    this(IReadonlyScope containingScope, const(SyntaxNode)* originalDefinitionNode, uarray!SyntaxNode defNodes)
-    {
-        super(containingScope);
-        this.originalDefinitionNode = originalDefinitionNode;
-        this.defNodes = defNodes;
-    }
-
-    final override passfail addAndCheckCall(RegularCall runtimeCall)
-    {
-        // Only need to add if I'm going to perform optimization later
-        calls.append(runtimeCall);
-
-        if (state == State.initial)
-        {
-            state = State.pass2Started;
-            uint errorCount = analyzeUserDefinedFunctionPass2(this);
-            assert(state == State.pass2Started, "codebug");
-            state = (errorCount > 0) ? State.analyzeFailed : State.pass2Done;
-        }
-        if (state == State.analyzeFailed)
-            return passfail.fail;
-        assert(state == State.pass2Done, "codebug");
-
-        from!"std.stdio".writefln("WARNING: %scheck regular call arguments not implemented",
-            runtimeCall.formatLocation());
-        return passfail.pass;
-    }
-
-    /*
-    final override void interpret(RegularCall call)
-        in { assert(codeAnalyzedCount == rawCode.length); } do
-    {
-        interpreter.interpretRegularCall(this, call);
-    }
-    */
-    //
-    // IDotQualifiable methods
-    //
-    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
-    {
-        if (fromInside)
-        {
-            assert(state == State.pass2Started, "codebug?");
-            return OptionalNodeResult(bodySymbolTable.tryGet(symbol));
-        }
-        else
-        {
-            assert(0, "not implemented");
-        }
-    }
-    void scopeDescriptionFormatter(StringSink sink) const { sink("function"); }
-    void dumpSymbols() const
-    {
-        bodySymbolTable.dump();
-    }
-    //
-    // SemanticNode methods
-    //
-    protected final override const(SyntaxNode)* getSyntaxNode() const { return originalDefinitionNode; }
-    final override void valueFormatter(StringSink sink) const { sink("<function>"); }
-    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
-    {
-        sink("<user-defined-function>");
-    }
-    //
-    // IReadonlyScope methods
-    //
-    @property final inout(IReadonlyScope) getParent() inout { return containingScope; }
-    @property final inout(Module) asModule() inout { return null; }
-    @property final inout(IScope) asWriteable() inout { return this; }
-    @property final inout(JumpBlock) asJumpBlock() inout { return null; }
-    final uint prepareForChildAnalyzePass2()
-    {
-        /*
-        I think this could happen if you have a call to a function
-        that is defined inside this function. i.e.
-        function(auto {} {
-            set(foo function(auto {} {}))
-            foo() // when this function is analyzed, it should call this function for
-                  // the parent function scope
-        })
-        */
-        // I don't actually think we need to do anything here, because if we are analyzing
-        // a call to a child function, then it must mean we have already done pass1?  Note
-        // that this also means that you cannot call a funciton inside a function outside
-        // that function.  This makes sense, if you want to call it outside the funciton, then
-        // define it outside the function.
-        assert(state == State.pass2Started, "codebug?");
-        return 0;
-    }
-    //
-    // IScope methods
-    //
-    void add(const(string) symbol, SemanticNode node)
-    {
-        auto existing = bodySymbolTable.checkedAdd(symbol, node);
-        if (existing)
-        {
-            from!"std.stdio".writefln("Error: function already has a definition for symbol '%s'",
-                symbol);
-            throw quit;
-        }
-    }
-    void evaluated(const(string) symbol, SemanticNode node)
-    {
-        if (bodySymbolTable.update(symbol, node).failed)
-        {
-            from!"std.stdio".writefln("Error: CodeBug: attempted to update symbol '%s' but it does not exist!", symbol);
-            throw quit;
-        }
-    }
-}
++/
 
 // A single contingous range of numbers between 0 (inclusive) and infinity
 struct PositiveRange
@@ -1848,12 +1997,14 @@ class JumpBlock : IScope
     //
     // IScope functions
     //
-    void add(const(string) symbol, SemanticNode node)
+    SymbolTableEntry tryAdd(string symbol, SemanticNode node)
     {
         assert(0, "not implemented");
     }
+    /+
     void evaluated(const(string) symbol, SemanticNode node)
     {
         assert(0, "not implemented");
     }
+    +/
 }

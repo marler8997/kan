@@ -19,7 +19,7 @@ import analyzer/* : AnalyzeOptions, analyzeSemanticCallPass1,
 import interpreter : Interpreter;
 static import interpreter;
 
-passfail checkSyntaxArgCount(SemanticCall call, uint expectedArgCount)
+passfail checkSyntaxArgCount(const(SemanticCall) call, uint expectedArgCount)
 {
     if (call.syntaxArgs.length != expectedArgCount)
     {
@@ -29,6 +29,7 @@ passfail checkSyntaxArgCount(SemanticCall call, uint expectedArgCount)
     }
     return passfail.pass;
 }
+/*
 passfail checkSemanticArgCount(SemanticCall call, uint expectedArgCount)
 {
     if (call.semanticArgs.length != expectedArgCount)
@@ -39,6 +40,7 @@ passfail checkSemanticArgCount(SemanticCall call, uint expectedArgCount)
     }
     return passfail.pass;
 }
+*/
 
 /+
 Symbol tryArgAsSymbolPass1(IReadonlyScope scope_, SemanticCall call, uint argIndex)
@@ -52,6 +54,11 @@ Symbol tryArgAsSymbolPass1(IReadonlyScope scope_, SemanticCall call, uint argInd
 }
 +/
 
+template tuple(T...)
+{
+    alias tuple = T;
+}
+
 // TODO: a developer can add analyze-time functions, however,
 //       they will need to be in special modules that the compiler
 //       must load immediately (never loads them lazily).
@@ -63,152 +70,133 @@ Symbol tryArgAsSymbolPass1(IReadonlyScope scope_, SemanticCall call, uint argInd
 // let(<symbol> <expression>)  // permanently sets <symbol> to <expressioon>
 // set(<symbol> <expression>)  // temporarily set <symbol> to <expression>
 //
-SemanticFunction tryFindSemanticFunction(const(CallSyntaxNode)* call)
+SemanticCall tryGetSemanticFunctionFor(const(CallSyntaxNode)* call)
 {
-    return tryFindSemanticFunction(call.functionName, call.arguments.unconst);
+    return tryGetSemanticFunctionFor(call.base, call.functionName, call.arguments.unconst);
 }
-SemanticFunction tryFindSemanticFunction(const(char)[] functionName, uarray!SyntaxNode args)
+SemanticCall tryGetSemanticFunctionFor(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode args)
 {
-    //
-    // Syntax Only methods
-    //
-    if (functionName == "flag")
-        return cast()flagFunction.instance.checkAndGet(args);
-    if (functionName == "symbol")
-        return cast()symbolFunction.instance.checkAndGet(args);
-    if (functionName == "enum")
-        return cast()enumFunction.instance.checkAndGet(args);
-    if (functionName == "dumpSymbolTable")
-        return cast()dumpSymbolTableFunction.instance.checkAndGet(args);
-    // TODO: maybe call(...) should be a syntaxOnly function?
-
-    //
-    // All Other Semantic methods
-    //
-    if (functionName == "import")
-        return cast()importFunction.instance.checkAndGet(args);
-    if (functionName == "set")
-        return cast()setFunction.instance.checkAndGet(args);
-    if (functionName == "setBultinFunction")
-        return cast()setBuiltinFunctionFunction.instance.checkAndGet(args);
-    if (functionName == "function")
-        return cast()functionFunction.instance.checkAndGet(args);
-    if (functionName == "call")
-        return cast()callFunction.instance.checkAndGet(args);
-    if (functionName == "jumpBlock")
-        return cast()jumpBlockFunction.instance.checkAndGet(args);
-    if (functionName == "jumpLoopIf")
-        return cast()jumpLoopIfFunction.instance.checkAndGet(args);
-    if (functionName == "foreach")
-        return cast()foreachFunction.instance.checkAndGet(args);
-    // TODO: look for custom analyze-time functions
-
-    return null;
-    // TODO: look for custom analyze-time functions
-
-    return null;
-}
-
-class flagFunction : SemanticFunction
-{
-    mixin singleton!(No.ctor);
-    private this() immutable
+    foreach (name; tuple!(
+        "flag",
+        "symbol",
+        "enum",
+        "dumpSymbolTable",
+        "import",
+        "set",
+        "setBuiltinFunction",
+        "function",
+        "call"
+        //"jumpBlock",
+        //"jumpLoopIf",
+        //"foreach",
+    ))
     {
-        super("flag", SemanticArgType.syntaxNode, null);
+        if (functionName == name)
+            return mixin("new " ~ name ~ "Call(syntaxNode, functionName, args)");
     }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+
+    // TODO: look for custom analyze-time functions
+
+    return null;
+}
+
+private class flagCall : BuiltinSemanticCall
+{
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
+    {
+        super(syntaxNode, functionName, syntaxArgs);
+    }
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
         // do nothing, no symbols to add
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
     {
-        if (call.syntaxArgs.length != 1)
-            return errorfNodeResult(call.formatLocation, "flag function with multiple arguments not implemented");
-        auto syntaxArg = &call.syntaxArgs[0];
+        if (syntaxArgs.length != 1)
+            return errorfNodeResult(formatLocation, "flag function with multiple arguments not implemented");
+        auto syntaxArg = &syntaxArgs[0];
+        // TODO: use tryAnalyzeToSymbol instead?
         if (syntaxArg.type != SyntaxNodeType.symbol)
-            return errorfNodeResult(call.formatLocation, "expected a symbol but got '%s'", syntaxArg.type);
+            return errorfNodeResult(formatLocation, "expected a symbol but got '%s'", syntaxArg.type);
         return NodeResult(new FlagValue(syntaxArg, syntaxArg.source));
     }
 }
-class symbolFunction : SemanticFunction
+
+private class symbolCall : BuiltinSemanticCall
 {
-    mixin singleton!(No.ctor);
-    private this() immutable
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
     {
-        super("symbol", SemanticArgType.syntaxNode, null);
+        super(syntaxNode, functionName, syntaxArgs);
     }
-    final static ResultOrError!Symbol interpretPass2(SemanticCall call)
-    {
-        if (call.syntaxArgs.length != 1)
-            return errorfSymbolResult(call.formatLocation,
-                "symbol function with more than 1 argument is not implemented");
-        auto arg = &call.syntaxArgs[0];
-        if (arg.type == SyntaxNodeType.symbol || arg.type == SyntaxNodeType.keyword)
-            return ResultOrError!Symbol(new SymbolFromSyntax(arg));
-        return errorfSymbolResult(call.formatLocation,
-            "symbol function for this type is not supported or not implemented");
-    }
-    //
-    //
-    //
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
         // do nothing, no symbols to add
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
     {
-        auto result = symbolFunction.interpretPass2(call);
-        if (result.value)
-            return NodeResult(result.value);
-        assert(result.errorCount > 0, "codebug");
-        return NodeResult(result.errorCount);
+        auto result = inTreeOrderInterpretPass2();
+        if (result.errorCount > 0)
+            return NodeResult(result.errorCount);
+        assert(result.value);
+        return NodeResult(result.value);
     }
-}
-class enumFunction : SemanticFunction
-{
-    mixin singleton!(No.ctor);
-    private this() immutable
+    final ResultOrError!Symbol inTreeOrderInterpretPass2() const
     {
-        super("enum", SemanticArgType.syntaxNode, null);
-    }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
-    {
-        // do nothing, no symbols to add
-        return 0;
-    }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
-    {
-        auto symbols = new string[call.syntaxArgs.length];
-        foreach (i, arg; call.syntaxArgs)
-        {
-            symbols[i] = arg.source;
-        }
-        return NodeResult(new EnumType(call.getSyntaxNode, symbols));
+        if (checkSyntaxArgCount(this, 1).failed)
+            return ResultOrError!Symbol(1);
+        auto result = tryAnalyzeToSymbolPass1(&syntaxArgs[0]);
+        if (result.errorCount > 0)
+            return ResultOrError!Symbol(result.errorCount);
+        if (!result.value)
+            return errorfSymbolResult(formatLocation,
+                "symbol function for this type is not supported or not implemented");
+        return ResultOrError!Symbol(result.value);
     }
 }
 
-class dumpSymbolTableFunction : SemanticFunction
+private class enumCall : BuiltinSemanticCall
 {
-    mixin singleton!(No.ctor);
-    private this() immutable
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
     {
-        super("dumpSymbolTable", SemanticArgType.syntaxNode, null);
+        super(syntaxNode, functionName, syntaxArgs);
     }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
         // do nothing, no symbols to add
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
     {
-        if (call.syntaxArgs.length != 0)
+        auto symbols = new string[syntaxArgs.length];
+        foreach (i, arg; syntaxArgs)
+        {
+            symbols[i] = arg.source;
+        }
+        return NodeResult(new EnumType(getSyntaxNode, symbols));
+    }
+}
+
+private class dumpSymbolTableCall : BuiltinSemanticCall
+{
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
+    {
+        super(syntaxNode, functionName, syntaxArgs);
+    }
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
+    {
+        // do nothing, no symbols to add
+        return 0;
+    }
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
+    {
+        if (syntaxArgs.length != 0)
         {
             assert(0, "dumpSymbolTable function with more than 0 arguments is not implemented");
         }
         scope_.dumpSymbols();
-        return NodeResult(new VoidValue(call.getSyntaxNode));
+        return NodeResult(new VoidValue(syntaxNode));
     }
 }
 
@@ -221,36 +209,37 @@ import(a.b.c)
 c.foo // access symbol 'foo' in module a.b.c
 ````
 **/
-class importFunction : SemanticFunction
+private class importCall : BuiltinSemanticCall
 {
-    mixin singleton!(No.ctor);
-    private this() immutable
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
     {
-        super("import", SemanticArgType.semiAnalyzedSemanticNode, null);
-        /*
-        super(immutable FunctionInterface(FunctionType.syntax, [
-            immutable Parameter(null, new immutable Multi(SymbolType.instance, positiveRangeFrom(1))),
-        ], null, FunctionFlags.none));
-        */
+        super(syntaxNode, functionName, syntaxArgs);
     }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+    SymbolTableEntry symbolTableEntry;
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
-        foreach (arg; call.semanticArgs)
+        foreach (i; 0 .. syntaxArgs.length)
         {
-            auto result = tryAnalyzeToSymbolPass1(arg);
-            if (!result.value)
-                return errorfUint(arg.formatLocation(), "import expects symbols, but got '%s'", arg);
+            auto syntaxArg = &syntaxArgs[i];
+            auto symbolResult = tryAnalyzeToSymbolPass1(syntaxArg);
+            if (symbolResult.errorCount > 0)
+                return symbolResult.errorCount;
+            if (!symbolResult.value)
+                return errorfUint(syntaxArg.formatLocation, "import expects symbols, but got '%s'", syntaxArg.type);
 
             // TODO: call.semanticArgs[i] = result.value ???
-            auto moduleName = result.value.value;
+            auto moduleName = symbolResult.value.value;
             auto moduleBaseName = sliceModuleBaseName(moduleName);
-            scope_.add(moduleBaseName, new LazyImport(call.getSyntaxNode, moduleName));
+            this.symbolTableEntry = scope_.tryAddOrPrintError(moduleBaseName, new LazyImport(syntaxNode, moduleName), formatLocation);
+            if (!this.symbolTableEntry)
+                return 1;
         }
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
     {
-        return NodeResult(new VoidValue(call.getSyntaxNode));
+        return NodeResult(new VoidValue(syntaxNode));
+        //return NodeResult(this.symbolTableEntry.unconst);
     }
 }
 class LazyImport : LazyNode
@@ -264,13 +253,16 @@ class LazyImport : LazyNode
     }
     protected final override NodeResult doEvaluate()
     {
-        // TODO: support errors
-        return NodeResult(new ImportedModule(importSyntaxNode, loadImport(moduleName)));
+        auto mod = loadImport(importSyntaxNode, moduleName);
+        if (!mod)
+            return NodeResult(1);
+        return NodeResult(new ImportedModule(importSyntaxNode, mod));
     }
     //
     // SemanticNode methods
     //
     protected final override const(SyntaxNode)* getSyntaxNode() const { return importSyntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { assert(0, "not implemented"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -278,74 +270,85 @@ class LazyImport : LazyNode
     }
 }
 
-class setFunction : SemanticFunction
+class setCall : BuiltinSemanticCall
 {
-    mixin singleton!(No.ctor);
-    private string symbol;
-    private this() immutable
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
     {
-        super("set", SemanticArgType.fullyAnalyzedSemanticNode, [
-            immutable NumberedSemanticArgType(SemanticArgType.semiAnalyzedSemanticNode, 1)
-        ]);
+        super(syntaxNode, functionName, syntaxArgs);
     }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+    SymbolTableEntry symbolTableEntry;
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
-        if(checkSemanticArgCount(call, 2).failed)
+        if (checkSyntaxArgCount(this, 2).failed)
             return 1;
 
-        auto symbolArg = call.semanticArgs[0];
-        auto result = tryAnalyzeToSymbolPass1(symbolArg);
-        if (!result.value)
-            return errorfUint(symbolArg.formatLocation(), "argument 1 of 'set' should be a symbol, but got '%s'", symbolArg);
-        //from!"std.stdio".writefln("[DEBUG] set '%s' at '%s', scope=%s",
-        //    result.value.value, call.formatLocation, scope_.formatScopeDescription);
-        scope_.add(result.value.value, call.semanticArgs[1]);
+        auto symbolSyntaxNode = &syntaxArgs[0];
+        auto symbolResult = tryAnalyzeToSymbolPass1(symbolSyntaxNode);
+        if (symbolResult.errorCount > 0)
+            return symbolResult.errorCount;
+        if (!symbolResult.value)
+            return errorfUint(symbolSyntaxNode.formatLocation, "argument 1 of 'set' should be a symbol, but got '%s'", symbolSyntaxNode.type);
+
+        auto rhsNode = newSemanticNode(&syntaxArgs[1]);
+        {
+            auto errorCount = inTreeOrderAnalyzeExpressionPass1(scope_, rhsNode);
+            if (errorCount > 0)
+                return errorCount;
+        }
+        this.symbolTableEntry = scope_.tryAddOrPrintError(symbolResult.value.value, rhsNode, formatLocation);
+        if (!this.symbolTableEntry)
+            return 1;
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
     {
         // TODO: maybe return the symbol table entry, make sure it is "ignorable" if we do so
-        return NodeResult(new VoidValue(call.getSyntaxNode));
+        //return NodeResult(new VoidValue(syntaxNode));
+        //return NodeResult(symbolTableEntry.unconst);
+        return NodeResult(new SetReturnNode(this.unconst));
     }
 }
 
-class setBuiltinFunctionFunction : SemanticFunction
+private class setBuiltinFunctionCall : BuiltinSemanticCall
 {
-    mixin singleton!(No.ctor);
-    private this() immutable
+    private SymbolTableEntry symbolTableEntry;
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
     {
-        super("setBuiltinFunction", SemanticArgType.semiAnalyzedSemanticNode, null);
+        super(syntaxNode, functionName, syntaxArgs);
     }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
-        if(checkSemanticArgCount(call, 1).failed)
+        if (checkSyntaxArgCount(this, 1).failed)
             return 1;
 
-        Symbol symbol;
-        {
-            auto symbolArg = call.semanticArgs[0];
-            auto result = tryAnalyzeToSymbolPass1(symbolArg);
-            if (!result.value)
-                return errorfUint(symbolArg.formatLocation(), "'setBuiltinFunction' requires a symbol but got '%s'", symbolArg);
-            symbol = result.value;
-        }
-        auto function_ = tryGetHiddenBuiltinRegularFunction(symbol.value);
+        auto symbolSyntaxNode = &syntaxArgs[0];
+        auto symbolResult = tryAnalyzeToSymbolPass1(symbolSyntaxNode);
+        if (symbolResult.errorCount > 0)
+            return symbolResult.errorCount;
+        if (!symbolResult.value)
+            return errorfUint(symbolSyntaxNode.formatLocation, "argument 1 of 'setBuiltinFunction' should be a symbol, but got '%s'", symbolSyntaxNode.type);
+
+        auto function_ = tryGetHiddenBuiltinRegularFunction(symbolResult.value.value);
         if (function_ is null)
-            return errorfUint(call.formatLocation, "builtin function '%s' does not exist", symbol.value);
+            return errorfUint(formatLocation, "builtin function '%s' does not exist", symbolResult.value.value);
 
         //
         // TODO: verify function_.interface matches the builtin function interface
         //
-        scope_.add(symbol.value, function_);
+        this.symbolTableEntry = scope_.tryAddOrPrintError(symbolResult.value.value, function_, formatLocation);
+        if (!this.symbolTableEntry)
+            return 1;
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
     {
         // TODO: maybe return the function itself
-        return NodeResult(new VoidValue(call.getSyntaxNode));
+        //return NodeResult(new VoidValue(call.getSyntaxNode));
+        return NodeResult(symbolTableEntry.unconst);
     }
 }
 
+/+
 class callFunction : SemanticFunction
 {
     enum isSemanticCall = cast(void*)1;
@@ -354,39 +357,10 @@ class callFunction : SemanticFunction
     mixin singleton!(No.ctor);
     private this() immutable
     {
-        super("call", SemanticArgType.syntaxNode, null);
+        super("call"/*, SemanticArgType.syntaxNode, null*/);
     }
     final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
     {
-        if (call.syntaxArgs.length == 0)
-            return errorfUint(call.formatLocation, "'call' requires at least 1 argument");
-
-        auto funcNode = newSemanticNode(&call.syntaxArgs[0]);
-        auto loweredSyntaxArgs = call.syntaxArgs[1 .. $];
-        auto result = tryAnalyzeToSymbolPass1(funcNode);
-        if (result.value)
-        {
-            auto semanticFunc = tryFindSemanticFunction(result.value.value, loweredSyntaxArgs);
-            if (semanticFunc)
-            {
-                call.funcData = isSemanticCall;
-                auto semanticCall = new SemanticCall(call.getSyntaxNode,
-                    semanticFunc, loweredSyntaxArgs);
-                call.semanticArgs = new SemanticNode[1].toUarray;
-                call.semanticArgs[0] = semanticCall;
-                return inTreeOrderAnalyzeSemanticCallPass1(scope_, semanticCall);
-            }
-        }
-        call.funcData = isRegularCall;
-        call.semanticArgs = new SemanticNode[call.syntaxArgs.length].toUarray;
-        call.semanticArgs[0] = funcNode;
-        newSemanticNodesInto(call.semanticArgs[1 .. $], loweredSyntaxArgs);
-        uint errorCount = 0;
-        foreach (arg; call.semanticArgs)
-        {
-            errorCount += inTreeOrderAnalyzeExpressionPass1(scope_, arg);
-        }
-        return errorCount;
     }
     final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
     {
@@ -412,7 +386,97 @@ class callFunction : SemanticFunction
             call.syntaxArgs[1 .. $], call.semanticArgs[1 .. $]));
     }
 }
++/
+private class callCall : BuiltinSemanticCall
+{
+    uarray!SemanticNode semanticNodes;
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
+    {
+        super(syntaxNode, functionName, syntaxArgs);
+    }
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
+    {
+        if (syntaxArgs.length == 0)
+            return errorfUint(formatLocation, "'call' requires at least 1 argument");
 
+        // For now we only support regular calls
+        semanticNodes = newSemanticNodes(syntaxArgs);
+        uint errorCount = 0;
+        foreach (semanticNode; semanticNodes)
+        {
+            errorCount += inTreeOrderAnalyzeExpressionPass1(scope_, semanticNode);
+        }
+        return errorCount;
+
+        /+
+        auto funcNode = newSemanticNode(&syntaxArgs[0]);
+        {
+            auto errorCount = inTreeOrderAnalyzeExpressionPass1(scope_, funcNode);
+            if (errorCount > 0)
+                return errorCount;
+        }
+        auto funcSymbol = tryAnalyzeToSymbolPass1(&syntaxArgs[0]);
+        auto loweredSyntaxArgs = syntaxArgs[1 .. $];
+        if (funcSymbol)
+        {
+            auto semanticFunc = tryFindSemanticFunction(result.value.value, loweredSyntaxArgs);
+            if (semanticFunc)
+            {
+                call.funcData = isSemanticCall;
+                auto semanticCall = new SemanticCall(call.getSyntaxNode,
+                    semanticFunc, loweredSyntaxArgs);
+                call.semanticArgs = new SemanticNode[1].toUarray;
+                call.semanticArgs[0] = semanticCall;
+                return inTreeOrderAnalyzeSemanticCallPass1(scope_, semanticCall);
+            }
+        }
+        call.funcData = isRegularCall;
+        call.semanticArgs = new SemanticNode[call.syntaxArgs.length].toUarray;
+        call.semanticArgs[0] = funcNode;
+        newSemanticNodesInto(call.semanticArgs[1 .. $], loweredSyntaxArgs);
+        uint errorCount = 0;
+        foreach (arg; call.semanticArgs)
+        {
+            errorCount += inTreeOrderAnalyzeExpressionPass1(scope_, arg);
+        }
+        return errorCount;
+        +/
+    }
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
+    {
+        assert(0, "not impl");
+        /+
+        auto functionArg = newSemanticNode(&syntaxArgs[0]);
+
+        this.regularCall = new RegularCall(syntaxNode, )
+    const(SyntaxNode)* syntaxNode;
+    uarray!SemanticNode arguments; // TODO: rename to semanticArgs
+    string functionNameToResolve;
+    RegularFunction function_;
+    this(const(SyntaxNode)* syntaxNode, string functionNameToResolve,
+        uarray!SyntaxNode syntaxArgs, uarray!SemanticNode arguments)
+    {
+        this.syntaxNode = syntaxNode;
+        this.functionNameToResolve = functionNameToResolve;
+        this.arguments = arguments;
+    }
+    this(const(SyntaxNode)* syntaxNode, RegularFunction function_,
+        uarray!SyntaxNode syntaxArgs, uarray!SemanticNode arguments)
+    {
+        this.syntaxNode = syntaxNode;
+        this.function_ = function_;
+        this.arguments = arguments;
+    }
++/
+
+
+        // TODO: maybe return the function itself
+        //return NodeResult(new VoidValue(call.getSyntaxNode));
+        //return NodeResult(symbolTableEntry.unconst);
+    }
+}
+
+/*
 struct FunctionStaticData
 {
     uarray!SemanticNode nodes;
@@ -422,29 +486,34 @@ struct FunctionStaticData
     bool builtin;
     Rebindable!IType returnType;
 }
-class functionFunction : SemanticFunction
+*/
+private class functionCall : BuiltinSemanticCall
 {
-    mixin singleton!(No.ctor);
-    private this() immutable
+    private IScope scope_;
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
     {
-        super("function", SemanticArgType.syntaxNode, null);
+        super(syntaxNode, functionName, syntaxArgs);
     }
-    final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
     {
+        this.scope_ = scope_;
         // do nothing for now, maybe we will need to analyze the function body later?
         // or maybe tha would be done later
         return 0;
     }
-    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_, SemanticCall call) const
+    private final UserDefinedFunction makeFunction() const
     {
-        assert(call.semanticArgs.length == 0, "codebug: why where there semantics nodes created for this?");
-
-        auto syntaxNode = call.getSyntaxNode;
-        assert(syntaxNode.type == SyntaxNodeType.call, "codebug");
-        auto callSyntaxNode = &syntaxNode.call;
-        //from!"std.stdio".writefln("[DEBUG] %sinterpretPass2 function, scope is '%s'", call.formatLocation, scope_.formatScopeDescription);
-        //assert(0);
-        return NodeResult(new UserDefinedFunction(scope_, callSyntaxNode.base, callSyntaxNode.arguments.unconst));
+        assert(scope_, "codebug: pass1 was not called?");
+        assert(syntaxNode.type == SyntaxNodeType.call, "codebug?");
+        return new UserDefinedFunction(scope_.unconst, syntaxNode, syntaxNode.call.arguments.unconst);
+    }
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
+    {
+        return NodeResult(makeFunction);
+    }
+    override OptionalResultOrError!RegularFunction tryInterpretToRegularFunction()
+    {
+        return OptionalResultOrError!RegularFunction(makeFunction);
     }
 }
 
@@ -453,7 +522,7 @@ class jumpBlockFunction : SemanticFunction
     mixin singleton!(No.ctor);
     private this() immutable
     {
-        super("jumpBlock", SemanticArgType.syntaxNode, null);
+        super("jumpBlock"/*, SemanticArgType.syntaxNode, null*/);
     }
     final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
     {
@@ -510,7 +579,7 @@ class jumpLoopIfFunction : SemanticFunction
     mixin singleton!(No.ctor);
     private this() immutable
     {
-        super("jumpLoopIf", SemanticArgType.semiAnalyzedSemanticNode, null);
+        super("jumpLoopIf"/*, SemanticArgType.semiAnalyzedSemanticNode, null*/);
     }
     final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
     {
@@ -546,7 +615,7 @@ class foreachFunction : SemanticFunction
     mixin singleton!(No.ctor);
     private this() immutable
     {
-        super("foreach", SemanticArgType.semiAnalyzedSemanticNode, null);
+        super("foreach"/*, SemanticArgType.semiAnalyzedSemanticNode, null*/);
     }
     final override uint inTreeOrderInterpretPass1(IScope scope_, SemanticCall call)
     {
@@ -600,6 +669,55 @@ class tupleFunction : SemanticFunction
 //
 // Builtin Regular methods that are available without any import
 //
+
+class assertFunction : BuiltinRegularFunction
+{
+    mixin singleton!(No.ctor);
+    private this() immutable
+    {
+        super("assert", immutable RegularFunctionInterface(VoidType.instance, [
+            //immutable Parameter("condition", AssertableType.instance),
+        ], null, FunctionFlags.none));
+    }
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
+    {
+        if (runtimeArgs.length != 1)
+            assert(0, "assert function expects 1 arguments (TODO: this should be checked during semantic analysis");
+        auto cond = runtimeArgs[0];
+        auto type = cond.getType();
+        auto typeAsIConditional = cast(IConditionalType)type;
+        if (!typeAsIConditional)
+            assert(0, from!"std.format".format("type '%s' does not implement IConditionalType", type));
+        auto result = typeAsIConditional.isTrue(cond);
+        if (!result)
+        {
+            errorf(call.formatLocation, "assert failed: %s", call.syntaxNode.source);
+            throw quit;
+        }
+        return null;
+    }
+}
+class equalsFunction : BuiltinRegularFunction
+{
+    mixin singleton!(No.ctor);
+    private this() immutable
+    {
+        super("equals", immutable RegularFunctionInterface(BoolType.instance, [
+            //immutable Parameter(null, new immutable Multi(PrintableType.instance, positiveRangeFrom(1))),
+        ], null, FunctionFlags.none));
+    }
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
+    {
+        if (runtimeArgs.length != 2)
+            assert(0, "equals function expects 2 arguments (TODO: this should be checked during semantic analysis");
+        auto lhs = runtimeArgs[0];
+        auto type = lhs.getType();
+        auto typeAsEquatable = cast(IEquatableType)type;
+        if (!typeAsEquatable)
+            assert(0, from!"std.format".format("lhs type '%s' is not IEquatableType", type));
+        return new Bool(call.getSyntaxNode, typeAsEquatable.equals(lhs, runtimeArgs[1]));
+    }
+}
 class lengthFunction : BuiltinRegularFunction
 {
     mixin singleton!(No.ctor);
@@ -609,7 +727,7 @@ class lengthFunction : BuiltinRegularFunction
             immutable Parameter(null, AnySingleThing.instance),
         ], null, FunctionFlags.none));
     }
-    final override void interpret(Interpreter* interpreter, RegularCall call)
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
     {
         assert(0, "not implemented");
     }
@@ -624,7 +742,7 @@ class leftIsLessFunction : BuiltinRegularFunction
             immutable Parameter(null, AnySingleThing.instance),
         ], null, FunctionFlags.none));
     }
-    final override void interpret(Interpreter* interpreter, RegularCall call)
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
     {
         assert(0, "not implemented");
     }
@@ -642,7 +760,7 @@ class allocaFunction : BuiltinRegularFunction
             // TODO: maybe we need alignment parameter?
         ], null, FunctionFlags.none));
     }
-    final override void interpret(Interpreter* interpreter, RegularCall call)
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
     {
         assert(0, "not implemented");
     }
@@ -658,7 +776,7 @@ class ptrToFunction : BuiltinRegularFunction
             immutable Parameter(null, AnySingleThing.instance),
         ], null, FunctionFlags.none));
     }
-    final override void interpret(Interpreter* interpreter, RegularCall call)
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
     {
         assert(0, "not implemented");
     }
@@ -686,14 +804,14 @@ class printFunction : BuiltinRegularFunction
             immutable Parameter(null, new immutable Multi(PrintableType.instance, positiveRangeFrom(1))),
         ], ["noNewline"], FunctionFlags.none));
     }
-    final override void interpret(Interpreter* interpreter, RegularCall call)
+    final override SemanticNode interpret(Interpreter* interpreter, RegularCall call, uarray!SemanticNode runtimeArgs)
     {
         bool addNewline = true;
 
         uint argumentIndex = 0;
-        if (argumentIndex < call.arguments.length)
+        if (argumentIndex < runtimeArgs.length)
         {
-            auto arg = call.arguments[argumentIndex];
+            auto arg = runtimeArgs[argumentIndex];
             auto asFlag = cast(FlagValue)arg;
             if (asFlag !is null)
             {
@@ -710,7 +828,7 @@ class printFunction : BuiltinRegularFunction
             }
         }
 
-        foreach (arg; call.arguments[argumentIndex .. $])
+        foreach (arg; runtimeArgs[argumentIndex .. $])
         {
             // TODO: use runtime value in the future
 
@@ -722,6 +840,6 @@ class printFunction : BuiltinRegularFunction
         {
             from!"std.stdio".writeln();
         }
+        return null;
     }
 }
-

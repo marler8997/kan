@@ -27,7 +27,7 @@ printNum1(42)
 //
 // Use the 'call' function to call functions
 //
-
+/*
 // Call the function using the 'call' method
 call(printHelloFunctions)
 call(symbol(printHelloFunctions))
@@ -45,3 +45,4 @@ set(symbol(false) function(void {} {
 }))
 call(symbol(false))
 call(call(symbol false))
+*/

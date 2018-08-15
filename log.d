@@ -4,7 +4,7 @@ import more.format : StringSink;
 
 static import global;
 import common : passfail;
-import semantics : ResultOrError, NodeResult, Symbol;
+import semantics : ResultOrError;
 
 struct LocationFormatter
 {
@@ -69,19 +69,30 @@ passfail errorfPassfail(Location, Args...)(Location location, string format, Arg
     return passfail.fail;
 }
 
-NodeResult errorfNodeResult(Location, Args...)(Location location, string format, Args args)
+
+ResultOrError!T errorfResultOrError(T, Location, Args...)(Location location, string format, Args args)
 {
     import std.stdio : writef, writefln;
     writef("%sError: ", location);
     writefln(format, args);
-    return NodeResult(1);
+    return ResultOrError!T(1);
 }
-ResultOrError!Symbol errorfSymbolResult(Location, Args...)(Location location, string format, Args args)
+OptionalResultOrError!T errorfOptionalResultOrError(T, Location, Args...)(Location location, string format, Args args)
 {
     import std.stdio : writef, writefln;
     writef("%sError: ", location);
     writefln(format, args);
-    return ResultOrError!Symbol(1);
+    return OptionalResultOrError!T(1);
+}
+auto errorfNodeResult(Location, Args...)(Location location, string format, Args args)
+{
+    import semantics : SemanticNode;
+    return errorfResultOrError!(SemanticNode, Location, Args)(location, format, args);
+}
+auto errorfSymbolResult(Location, Args...)(Location location, string format, Args args)
+{
+    import semantics : Symbol;
+    return errorfResultOrError!(Symbol, Location, Args)(location, format, args);
 }
 auto errorfNullable(T, Location, Args...)(Location location, string format, Args args)
 {

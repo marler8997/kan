@@ -23,9 +23,10 @@ import id : Id;
 import syntax : SyntaxNode;
 import parser : Parser;
 import semantics;
-import types : IType, ModuleType;
+import types : IType, ModuleType, VoidType;
 import symtab : SymbolTable;
-import interpreter : CodeBlockPosition, Interpreter;
+import universal : UniversalScope;
+import interpreter : Interpreter;
 import analyzer : AnalyzeOptions;
 static import analyzer;
 
@@ -195,8 +196,7 @@ class Module : IScope
     {
         assert(state == State.pass2Done, "codebug");
         auto interpreter = Interpreter();
-        interpreter.blockStack.put(CodeBlockPosition(semanticNodes, 0));
-        interpreter.run();
+        interpreter.interpretFunctionOrModule(VoidType.instance, uarray!SemanticNode.nullValue, semanticNodes);
     }
     auto formatLocation(size_t lineNumber)
     {
@@ -271,16 +271,12 @@ class Module : IScope
     //
     // IScope methods
     //
-    void add(const(string) symbol, SemanticNode node)
+    SymbolTableEntry tryAdd(string symbol, SemanticNode node)
     {
-        auto existing = symbolTable.checkedAdd(symbol, node);
-        if (existing)
-        {
-            from!"std.stdio".writefln("Error: %s already has a definition for symbol '%s'",
-                /*formatLocation(assignment.symbol), */filename, symbol);
-            throw quit;
-        }
+        auto result = symbolTable.tryAdd(symbol, node);
+        return result.newEntryAdded ? result.entry : null;
     }
+    /+
     void evaluated(const(string) symbol, SemanticNode node)
     {
         if (symbolTable.update(symbol, node).failed)
@@ -289,6 +285,7 @@ class Module : IScope
             throw quit;
         }
     }
+    +/
 }
 
 auto moduleBaseNameIdFromFileName(inout(char)[] filename)
@@ -316,7 +313,7 @@ auto sliceModuleBaseName(inout(char)[] fullModuleName)
 }
 
 
-Module loadImport(string importName)
+Module loadImport(const(SyntaxNode)* locationSyntaxNode, string importName)
 {
     // first check if the module is already loaded
     foreach (module_; global.modules.data)
@@ -351,12 +348,13 @@ Module loadImport(string importName)
             from!"std.stdio".writefln("Error: cannot import '%s' because there are no include paths", importName);
             throw quit;
         }
-        from!"std.stdio".writefln("Error: import \"%s\" is not found in any of the following include paths:", importName);
+        errorf(locationSyntaxNode.formatLocation(),
+            "import \"%s\" is not found in any of the following include paths:", importName);
         foreach (i, importPath; global.importPaths.data)
         {
             from!"std.stdio".writefln("[%s] %s", i, importPath.formatDir);
         }
-        throw quit;
+        return null;
     }
     return loadModuleFromFileCommon(moduleFileName, No.isEntryModule, importName);
 }
@@ -391,52 +389,4 @@ private Module loadModuleFromFileCommon(string filename, Flag!"isEntryModule" is
     auto newModule = new Module(filename, isEntryModule, importName);
     global.modules.put(newModule);
     return newModule;
-}
-
-struct BuiltinSymbol
-{
-    string symbol;
-    SemanticNode node;
-
-    static import builtin;
-    import types;
-    __gshared static immutable values = [
-        immutable BuiltinSymbol("u32", UnsignedFixedWidthType!32.instance),
-        immutable BuiltinSymbol("leftIsLess", builtin.leftIsLessFunction.instance),
-        immutable BuiltinSymbol("length", builtin.lengthFunction.instance),
-        immutable BuiltinSymbol("alloca", builtin.allocaFunction.instance),
-        immutable BuiltinSymbol("ptrTo", builtin.ptrToFunction.instance),
-    ];
-}
-
-class UniversalScope : IReadonlyScope
-{
-    mixin singleton;
-    //
-    // IDotQualifiable methods
-    //
-    OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
-    {
-        //from!"std.stdio".writefln("Universal.tryGetUnqualified(\"%s\")", symbol);
-        foreach (ref builtinSymbol; BuiltinSymbol.values)
-        {
-            if (builtinSymbol.symbol == symbol)
-                return OptionalNodeResult(builtinSymbol.node.unconst);
-        }
-        return OptionalNodeResult(null);
-    }
-    void scopeDescriptionFormatter(StringSink sink) const { sink("global scope"); }
-    void dumpSymbols() const
-    {
-        assert(0, "UniversalScope.dumpSymbols not impelemented");
-    }
-    //
-    // IReadonlyScope methods
-    //
-    @property final inout(IReadonlyScope) getParent() inout { return null; }
-    // TODO: probably return a pseudo universal-module
-    @property final inout(Module) asModule() inout { assert(0, "not implemented"); }
-    @property final inout(IScope) asWriteable() inout { return null; }
-    @property final inout(JumpBlock) asJumpBlock() inout { return null; }
-    final uint prepareForChildAnalyzePass2() { return 0; }
 }

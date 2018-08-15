@@ -1,7 +1,7 @@
 module types;
 
 import std.typecons : Flag, Yes, No;
-import std.format : formattedWrite;
+import std.format : formattedWrite, format;
 
 import more.format : StringSink, DelegateFormatter;
 
@@ -62,7 +62,7 @@ interface IIgnorable
 {
 }
 
-interface IValuePrinter
+interface IValuePrinterType
 {
     void print(StringSink sink, const(Value) value) const;
 }
@@ -88,7 +88,7 @@ interface IType
         const(Value) value;
         void toString(StringSink sink)
         {
-            auto printer = cast(IValuePrinter)type;
+            auto printer = cast(IValuePrinterType)type;
             if (printer)
             {
                 printer.print(sink, value);
@@ -97,7 +97,7 @@ interface IType
             {
                 sink("[Value of type ");
                 sink((cast(Object)type).classinfo.name);
-                sink(" that type does not implement IValuePrinter]");
+                sink(" that type does not implement IValuePrinterType]");
             }
         }
     }
@@ -122,6 +122,16 @@ interface IVariadicType
 // A type whose values can be used as conditionals for branching
 interface IConditionalType
 {
+    bool isTrue(SemanticNode node) const;
+}
+
+interface IEquatableType
+{
+    bool equals(SemanticNode node, SemanticNode rhs);
+}
+interface IEquatableTypeNumberType
+{
+    bool equalsNumber(SemanticNode node, const(char)[] number);
 }
 
 interface IRangeType
@@ -202,7 +212,7 @@ class VoidPtrType : BuiltinType
     }
     final override void formatter(StringSink sink) const { sink("ptrTo(void)"); }
     //
-    // IValuePrinter methods
+    // IValuePrinterType methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -211,11 +221,11 @@ class VoidPtrType : BuiltinType
     }
 }
 
-class NumberType : BuiltinType
+class NumberType : BuiltinType, IEquatableType, IEquatableTypeNumberType, IValuePrinterType
 {
     //mixin singleton;
     //
-    // IValuePrinter methods
+    // IValuePrinterType methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -224,7 +234,7 @@ class NumberType : BuiltinType
     }
 }
 
-class NumberLiteralType : IType, IValuePrinter
+class NumberLiteralType : NumberType
 {
     mixin singleton;
 
@@ -237,21 +247,51 @@ class NumberLiteralType : IType, IValuePrinter
     */
 
     //
+    // IEquatableTypeNumber methods
+    //
+    final bool equalsNumber(SemanticNode node, const(char)[] rhsNumber)
+    {
+        auto nodeAsNumberLiteral = cast(NumberLiteral)node;
+        assert(nodeAsNumberLiteral, "codebug");
+
+        auto lhsNumber = nodeAsNumberLiteral.syntaxNode.source;
+        auto result = lhsNumber == rhsNumber;
+        from!"std.stdio".writefln("[DEBUG] %s == %s ? %s",
+            lhsNumber, rhsNumber, result);
+        return result;
+    }
+    //
+    // IEquatableType methods
+    //
+    final bool equals(SemanticNode node, SemanticNode rhs)
+    {
+        auto nodeAsNumberLiteral = cast(NumberLiteral)node;
+        assert(nodeAsNumberLiteral, "codebug");
+
+        auto rhsType = rhs.getType();
+        auto rhsTypeAsEquatableNumber = cast(IEquatableTypeNumberType)rhsType;
+        if (!rhsTypeAsEquatableNumber)
+            assert(0, format("type '%s' does not implement IEquatableTypeNumber", rhsType));
+        return rhsTypeAsEquatableNumber.equalsNumber(rhs, nodeAsNumberLiteral.syntaxNode.source);
+    }
+    //
     // IType methods
     //
-    final bool supports(SemanticNode node)
+    final override bool supports(SemanticNode node)
     {
         assert(0, "not implemented");
     }
     final override void formatter(StringSink sink) const { sink("NumberLiteral"); }
     //
-    // IValuePrinter methods
+    // IValuePrinterType methods
     //
+    /*
     final void print(StringSink sink, const(Value) value) const
     {
         assert(0, "not implemented");
         //sink(get(value).source);
     }
+    */
 }
 class SymbolType : IType
 {
@@ -290,7 +330,7 @@ class SymbolType : IType
     +/
 }
 
-class StringLiteralType : BuiltinType, IType, IValuePrinter
+class StringLiteralType : BuiltinType, IType, IValuePrinterType
 {
     mixin singleton;
 
@@ -310,7 +350,7 @@ class StringLiteralType : BuiltinType, IType, IValuePrinter
     }
     final override void formatter(StringSink sink) const { sink("string"); }
     //
-    // IValuePrinter methods
+    // IValuePrinterType methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -319,7 +359,7 @@ class StringLiteralType : BuiltinType, IType, IValuePrinter
     }
 }
 
-class StringType : IType, IValuePrinter
+class StringType : IType, IValuePrinterType
 {
     mixin singleton;
 
@@ -340,7 +380,7 @@ class StringType : IType, IValuePrinter
     }
     final override void formatter(StringSink sink) const { sink("string"); }
     //
-    // IValuePrinter methods
+    // IValuePrinterType methods
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -348,7 +388,7 @@ class StringType : IType, IValuePrinter
         //sink(get(value).str);
     }
 }
-class BoolType : IType
+class BoolType : BuiltinType, IConditionalType, IEquatableType
 {
     mixin singleton;
     mixin valueCreatorAndGetter!("", "bool");
@@ -364,9 +404,25 @@ class BoolType : IType
     }
     */
     //
+    // IConditionalType methods
+    //
+    final bool isTrue(SemanticNode node) const
+    {
+        auto asBool = cast(Bool)node;
+        assert(asBool, "codebug");
+        return asBool.value;
+    }
+    //
+    // IEquatableType methods
+    //
+    final bool equals(SemanticNode node, SemanticNode rhs)
+    {
+        assert(0, "not implemented");
+    }
+    //
     // IType methods
     //
-    final bool supports(SemanticNode node)
+    final override bool supports(SemanticNode node)
     {
         assert(0, "not implemented");
     }
@@ -654,6 +710,20 @@ class IntegerType : NumberType, IType
 
     //mixin valueCreatorAndGetter!("", "string");
 
+    //
+    // IEquatableTypeNumber methods
+    //
+    final bool equalsNumber(SemanticNode node, const(char)[] rhsNumber)
+    {
+        assert(0, "not implemented");
+    }
+    //
+    // IEquatableType methods
+    //
+    final bool equals(SemanticNode node, SemanticNode rhs)
+    {
+        assert(0, "not implemented");
+    }
     //
     // IType methods
     //
@@ -962,7 +1032,7 @@ class RuntimeCallType : IType
     }
     final override void formatter(StringSink sink) const { sink("call"); }
 }
-class SemanticCallType : IType, IValuePrinter
+class SemanticCallType : IType, IValuePrinterType
 {
     mixin singleton;
     mixin valueCreatorAndGetter!("inout", "SemanticCall");
@@ -975,7 +1045,7 @@ class SemanticCallType : IType, IValuePrinter
     }
     final override void formatter(StringSink sink) const { sink("SemanticCall"); }
     //
-    // IValuePrinter functions
+    // IValuePrinterType functions
     //
     final void print(StringSink sink, const(Value) value) const
     {
@@ -1003,7 +1073,7 @@ class BuiltinRuntimeFunctionType : RuntimeFunctionType
     final override void formatter(StringSink sink) const { sink("BuiltinRuntimeFunction"); }
 }
 
-class EnumType : BuiltinType, IType//, IValuePrinter
+class EnumType : BuiltinType, IType//, IValuePrinterType
 {
     EnumValue[] values;
     this(const(SyntaxNode)* syntaxNode, string[] symbols)
@@ -1046,7 +1116,7 @@ class EnumType : BuiltinType, IType//, IValuePrinter
         assert(0, "EnumType.dumpSymbols not impelemented");
     }
     //
-    // IValuePrinter methods
+    // IValuePrinterType methods
     //
     //final void print(StringSink sink, const(Value) value) const
     //{

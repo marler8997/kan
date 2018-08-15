@@ -7,159 +7,134 @@ import more.alloc : GCDoubler;
 import more.builder : Builder;
 
 import common : from, uarray, toUarray, quit;
-
+import log;
 import syntax : SyntaxNodeType, SyntaxNode, CallSyntaxNode;
 import semantics/* : IHighLevelVisitor, IScope, SemanticNodeType, SemanticNode, RegularCall,
                    BuiltinRegularFunction, UserDefinedFunction,
                    BlockFlags*/;
+import types : IType, VoidType;
 
-/*
-union InterpretTimeParamValue
+struct RuntimeBlock
 {
-    SemanticNode node;
-}
-*/
-
-struct CodeBlockPosition
-{
-    static CodeBlockPosition nullValue() { return CodeBlockPosition(uarray!SemanticNode.init); }
-
-    uarray!SemanticNode nodes;
-    uint nextStatementIndex = void;
-    uarray!SemanticNode args;
-    BlockFlags flags;
-    //Builder!(ubyte, GCDoubler!64) stack;
-    pragma(inline) bool isNull() { return nodes.ptr == null; }
-}
-
-struct Stack(T)
-{
-    T current = T.nullValue;
-    private Appender!(T[]) stack;
-    bool empty() { return current.isNull; }
-    void put(T newValue)
-    {
-        if (!current.isNull)
-            stack.put(current);
-        current = newValue;
-    }
-    void pop()
-    {
-        if (stack.data.length == 0)
-        {
-            current = T.nullValue;
-        }
-        else
-        {
-            current = stack.data[$-1];
-            stack.shrinkTo(stack.data.length - 1);
-        }
-    }
+    RuntimeBlock *parentBlock;
+    uarray!SemanticNode args; // the arguments if it is a function
+    uarray!SemanticNode statements;
+    size_t nextStatement;
+    SemanticNode returnValue;
 }
 
 struct Interpreter
 {
-    Stack!CodeBlockPosition blockStack;
-    void run()
+    RuntimeBlock *currentBlock;
+    SemanticNode interpretFunctionOrModule(const(IType) returnType, uarray!SemanticNode args, uarray!SemanticNode statements)
     {
-    BLOCK_STACK_LOOP:
-        for (; !blockStack.empty; blockStack.pop)
+        auto newBlock = RuntimeBlock(currentBlock, args, statements, 0, null);
+        this.currentBlock = &newBlock;
+        scope(exit) this.currentBlock = newBlock.parentBlock;
+
+        for(;;)
         {
-            for (;;)
+            if (newBlock.returnValue)
+                return newBlock.returnValue;
+            auto statementIndex = newBlock.nextStatement;
+            if (statementIndex >= newBlock.statements.length)
             {
-                if (blockStack.current.nextStatementIndex >= blockStack.current.nodes.length)
-                {
-                    assert(blockStack.current.nextStatementIndex == blockStack.current.nodes.length, "code bug");
-                    break;
-                }
-                //from!"std.stdio".writefln("intepret statement %s: %s", blockStack.current.nextStatementIndex,
-                //    blockStack.current.nodes[blockStack.current.nextStatementIndex]);
-                handle(blockStack.current.nodes[blockStack.current.nextStatementIndex++]);
-                if (blockStack.empty)
-                    break BLOCK_STACK_LOOP;
+                if (returnType is VoidType.instance)
+                    return null;
+                assert(0, "code bug? reached end of function or module without a return value being set, maybe this is OK in some cases?");
             }
+            newBlock.nextStatement++;
+            interpretStatement(statements[statementIndex]);
         }
     }
-
-    private void handle(SemanticNode node)
+    private SemanticNode interpretStatement(SemanticNode node)
     {
-        static class Visitor : IHighLevelVisitor
+        verbose(3, "interpretStatement '%s'", node);
+        static class Visitor : HighLevelVisitorNotImplementedByDefault
         {
             Interpreter* interpreter;
+            SemanticNode returnValue;
             this(Interpreter* interpreter) { this.interpreter = interpreter; }
-            void visit(Tuple) { assert(0, "interpreter.handle(Tuple) not implemented"); }
-            //void visit(Void) { }
-            void visit(Symbol) { assert(0, "Symbol not implemented"); }
-            void visit(RegularCall node)
+            final override void visit(SymbolTableEntry node) { node.currentNode.accept(this); }
+            final override void visit(SetReturnNode node) { }
+            final override void visit(RegularCall node)
             {
-
-                //from!"std.stdio".writefln("[DEBUG] interpret runtime funtion '%s'", node.runtimeCall.syntaxNode.functionName);
-                auto asBuiltin = cast(BuiltinRegularFunction)node.function_;
-                if (asBuiltin)
-                {
-                    asBuiltin.interpret(interpreter, node);
-                }
-                else
-                {
-                    auto userDefined = cast(UserDefinedFunction)node.function_;
-                    assert(userDefined, "codebug: expected BuiltinRegularFunction or UserDefinedFunction");
-
-                    // Setup the stack!
-                    // Need to map the call arguments to the function parameters
-                    if (node.arguments.length != userDefined.params.length)
-                    {
-                        from!"std.stdio".writefln("call argument count %s != function argument count %s, not implemented",
-                            node.arguments.length, userDefined.params.length);
-                        throw quit;
-                    }
-                    auto args = new SemanticNode[userDefined.params.length];
-                    foreach (argIndex; 0 .. node.arguments.length)
-                    {
-                        //node.arguments[argIndex].makeValue(&paramValues[argIndex]);
-                        args[argIndex] = node.arguments[argIndex];
-                    }
-
-                    interpreter.blockStack.put(CodeBlockPosition(userDefined.bodyNodes, 0, args.toUarray));
-                    //interpretRegularCall(&node.runtimeCall, asUserDefined);
-                }
+                this.returnValue = interpreter.interpretRegularCall(node);
             }
-            void visit(SemanticCall) { assert(0, "SemanticCall not implemented"); }
-            void visit(BuiltinType) { assert(0, "BuiltinType not implemented"); }
-            void visit(SemanticFunction) { assert(0, "SemanticFunction not implemented"); }
-            void visit(RegularFunction) { assert(0, "RegularCall not implemented"); }
-            void visit(Value) { /* just ignore value*/ }
-            void visit(FunctionParameter) { assert(0, "FunctionParameter not implemented"); }
-            void visit(LazyNode) { assert(0, "LazyNode not implemented"); }
+            final override void visit(Value) { /* just ignore value*/ }
         }
         scope visitor = new Visitor(&this);
         node.accept(visitor);
-        /+
-        final switch(node.nodeType)
+        if (visitor.returnValue)
         {
-        case SemanticNodeType.typedValue:
-            import types : VoidType;
-            if (node.typedValue.asTypedValue.type.val !is VoidType.instance)
-            {
-                import types; from!"std.stdio".writefln("[DEBUG] typed value %s", node.typedValue.asTypedValue.type.formatName);
-                assert(0, "not implemented: interpreter handle semantc node typed value");
-            }
-            break;
-        case SemanticNodeType.tuple:
-            assert(0, "not implemented");
-        case SemanticNodeType.symbol:
-            assert(0, "not implemented");
-        case SemanticNodeType.semanticCall:
-            handle(node.semanticCall.returnValue);
-            break;
-        case SemanticNodeType.statementBlock:
-            blockStack.put(CodeBlockPosition(
-                node.statementBlock.statements, 0, node.statementBlock.flags
-            ));
-            break;
-        case SemanticNodeType.jump:
-            assert(0, "jump not implemented");
-            break;
+            // TODO: verify that the return value is ignorable!!!
+            return visitor.returnValue;
         }
-        +/
+        return null;
+    }
+    private SemanticNode interpretExpression(SemanticNode node)
+    {
+        verbose(3, "interpretExpression '%s'", node);
+        static class Visitor : HighLevelVisitorNotImplementedByDefault
+        {
+            Interpreter* interpreter;
+            SemanticNode returnValue;
+            this(Interpreter* interpreter) { this.interpreter = interpreter; }
+            final override void visit(SymbolTableEntry node)
+            {
+                this.returnValue = node.currentNode;
+                node.currentNode.accept(this);
+            }
+            final override void visit(Value node) { this.returnValue = node; }
+            final override void visit(RegularCall node)
+            {
+                this.returnValue = interpreter.interpretRegularCall(node);
+            }
+        }
+        scope visitor = new Visitor(&this);
+        node.accept(visitor);
+        return visitor.returnValue;
+    }
+    private SemanticNode interpretRegularCall(RegularCall call)
+    {
+        // interpret arguments
+        auto runtimeArgs = new SemanticNode[call.semanticArgs.length];
+        foreach (argIndex; 0 .. call.semanticArgs.length)
+        {
+            auto arg = interpretExpression(call.semanticArgs[argIndex]);
+            assert(arg, format("function argument expression returned no value"));
+            runtimeArgs[argIndex] = arg;
+        }
+
+        //from!"std.stdio".writefln("[DEBUG] interpret runtime funtion '%s'", call.runtimeCall.syntaxNode.functionName);
+        auto asBuiltin = cast(BuiltinRegularFunction)call.function_;
+        if (asBuiltin)
+        {
+            return asBuiltin.interpret(&this, call, runtimeArgs.toUarray);
+        }
+        else
+        {
+            auto userDefined = cast(UserDefinedFunction)call.function_;
+            assert(userDefined, "codebug: expected BuiltinRegularFunction or UserDefinedFunction");
+
+            // Setup the stack!
+            // Need to map the call arguments to the function parameters
+            if (runtimeArgs.length != userDefined.params.length)
+            {
+                from!"std.stdio".writefln("call argument count %s != function argument count %s, not implemented",
+                    runtimeArgs.length, userDefined.params.length);
+                throw quit;
+            }
+            auto returnType = cast(IType)userDefined.returnType;
+            if (!returnType)
+            {
+                assert(0, format(
+                    "a user-defined return type is not a type, it is '%s', this should have been caught during semantic analysis",
+                    userDefined.returnType));
+            }
+
+            //blockStack.put(CodeBlockPosition(userDefined.bodyNodes, 0, runtimeArgs.toUarray));
+            return interpretFunctionOrModule(returnType, runtimeArgs.toUarray, userDefined.bodyNodes);
+        }
     }
 }

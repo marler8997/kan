@@ -8,4 +8,4 @@
     // ...
 }))
 */
-setBultinFunction(interpret)
+setBuiltinFunction(interpret)

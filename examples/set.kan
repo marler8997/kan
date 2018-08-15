@@ -1,0 +1,39 @@
+import(meta)
+import(io)
+
+
+set(testSetNumberLiteral function(void {} {
+    io.print("testSetNumberLiteral")
+    io.print("-----------------------------------------")
+    set(a 0)
+    io.print("a is " a)
+    assert(equals(a 0))
+}))
+testSetNumberLiteral()
+
+
+set(testSetNumberVar function(void {} {
+    io.print("testSetNumberLiteral")
+    io.print("-----------------------------------------")
+    set(a 0)
+    set(b a)
+    io.print("b is " b)
+}))
+testSetNumberVar()
+
+/*
+set(test0 function(void {} {
+    io.print("test0")
+    set(a 0)
+    io.print("a is " a)
+    assert(equalsNumber(a 0))
+
+    set(b a)
+    io.print("b is " b)
+    assert(equalsNumber(b 0))
+
+    set(c ptrTo(a))
+    assert(equalsNumber(deref(c) 0))
+}))
+//test0()
+*/

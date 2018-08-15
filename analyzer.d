@@ -13,7 +13,44 @@ import syntax : SyntaxNodeType, SyntaxNode, TupleSyntaxNode, KeywordType;
 import types;
 import semantics;// : peelQualifier, IDotQualifiable, SymbolEntryDirect, SemanticNode, Type;
 import mod : Module;
-import builtin : symbolFunction;
+import builtin : tryGetSemanticFunctionFor, symbolCall;
+
+
+
+/*
+Analyze Contexts
+-------------------------------------
+#### Statement Context
+
+Example: RegularCall
+will cause the function that is called to be analyzed, the call will be added
+to the function
+
+Example: SymbolTableEntry
+not sure what to do here, I think if you just have a symbol table entry in a
+statement context then it might depend on what the actual symbol table entry is.
+
+#### Expression Context
+
+#### Regular Function Call Context
+
+The node is being called as a regular function, so it should be analyzed as a function that will be called.
+
+
+*/
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /**
 inTreeOrder* means that the node is being analyzed in the order it appears in the abstract syntax tree.
@@ -246,7 +283,7 @@ uint analyzeUserDefinedFunctionPass2(UserDefinedFunction func)
     //
     // Analyze returnType/parameters
     //
-    func.returnType = newSemanticNode(&func.defNodes[argOffset++]);
+    auto returnTypeNode = newSemanticNode(&func.defNodes[argOffset++]);
     if (argOffset >= func.defNodes.length)
         return errorfUint(func.formatLocation(), "function is missing parameters");
     const(TupleSyntaxNode)* paramTuple;
@@ -257,23 +294,10 @@ uint analyzeUserDefinedFunctionPass2(UserDefinedFunction func)
         paramTuple = &paramSyntaxNode.tuple;
     }
 
-    {
-        from!"std.stdio".writefln("func at '%s', containing scope is '%s'", func.formatLocation,
-            func.containingScope.formatScopeDescription);
-        auto errorCount = inTreeOrderAnalyzeExpressionPass2(func.containingScope, &func.returnType, AnalyzeOptions.none);
-        if (errorCount > 0)
-            return errorCount;
-    }
-    // TODO: make sure that returnType is a type
-    from!"std.stdio".writefln("WARNING: check that the function return type is actually a type");
-    /+
-        auto asTypeType = cast(TypeType)typedValue.type;
-        if (!asTypeType)
-        {
-            from!"std.stdio".writefln("Error: expected a return type but got %s", typedValue.type.formatName);
-            throw quit;
-        }
-    +/
+    func.returnType = analyzeToType(func.containingScope, returnTypeNode);
+    if (!func.returnType)
+        return errorfUint(returnTypeNode.formatLocation(), "expected the return type, but got '%s'", returnTypeNode);
+
     {
         auto paramTupleSemanticNodes = newSemanticNodes(paramTuple.nodes);
         {
@@ -320,7 +344,11 @@ uint analyzeUserDefinedFunctionPass2(UserDefinedFunction func)
                 return errorfUint(nameNode.formatLocation, "expected symbol but got '%s'", nameNode);
             auto param = new FunctionParameter(nameNode.getSyntaxNode, func, paramCount, result.value.value, type);
             paramBuffer[paramCount++] = param;
-            func.add(result.value.value, param);
+            {
+                auto entry = func.tryAddOrPrintError(result.value.value, param, result.value.formatLocation);
+                if (!entry)
+                    return 1;
+            }
         }
         func.params = paramBuffer[0 .. paramCount].toUarray;
     }
@@ -372,7 +400,7 @@ uint inTreeOrderAnalyzeRegularCallPass1(IScope scope_, RegularCall call)
 {
     verbose(2, "analyzeRegularCallPass1 '%s'", call.formatLocation);
     uint errorCount = 0;
-    foreach (arg; call.arguments)
+    foreach (arg; call.semanticArgs)
     {
         errorCount += inTreeOrderAnalyzeExpressionPass1(scope_, arg);
     }
@@ -384,9 +412,9 @@ uint inTreeOrderAnalyzeRegularCallPass2(IReadonlyScope scope_, RegularCall call,
     verbose(2, "analyzeRegularCallPass2 '%s' analyzeOptions=%s", call.formatLocation, analyzeOptions);
     {
         uint errorCount = 0;
-        foreach (i; 0 .. call.arguments.length)
+        foreach (i; 0 .. call.semanticArgs.length)
         {
-            errorCount += inTreeOrderAnalyzeExpressionPass2(scope_, &call.arguments[i], analyzeOptions);
+            errorCount += inTreeOrderAnalyzeExpressionPass2(scope_, &call.semanticArgs[i], analyzeOptions);
         }
         if (errorCount > 0)
             return errorCount;
@@ -416,6 +444,7 @@ uint inTreeOrderAnalyzeRegularCallPass2(IReadonlyScope scope_, RegularCall call,
     return 0;
 }
 
+    /+
 uint inTreeOrderAnalyzeSemanticCallPass1(IScope scope_, SemanticCall call)
 {
     verbose(2, "analyzeSemanticCallPass1 '%s'", call.formatNameForMessage);
@@ -434,6 +463,26 @@ uint inTreeOrderAnalyzeSemanticCallPass1(IScope scope_, SemanticCall call)
 private NodeResult inTreeOrderAnalyzeSemanticCallPass2(IReadonlyScope scope_, SemanticCall call, AnalyzeOptions analyzeOptions)
 {
     verbose(4, "analyzeSemanticCallPass2 %s", call.formatNameForMessage);
+    {
+        uint errorCount = 0;
+        foreach (arg; call.function_.semanticNodeRange(call.syntaxArgs.length))
+        {
+            if (arg.fullyAnalyzed)
+                analyzeOptions.enablePreventNonFunctionSymbolResolution();
+            else
+                analyzeOptions.enablePreventNonFunctionSymbolResolution();
+            errorCount += inTreeOrderAnalyzeExpressionPass2(scope_, &call.semanticArgs[arg.semanticNodeIndex], analyzeOptions);
+
+            //this.semanticArgs[arg.semanticNodeIndex] = newSemanticNode(&syntaxArgs[arg.syntaxNodeIndex]);
+            //initializedCount++;
+        }
+        if (errorCount > 0)
+            return NodeResult(errorCount);
+    }
+    return call.function_.inTreeOrderInterpretPass2(scope_, call/*, analyzeOptions*/);
+
+
+    /+
     const argumentNodesToAnalyzeCount = call.function_.semanticNodeAnalyzeCountFor(call.syntaxArgs.length);
     if (call.function_.defaultArgType == SemanticArgType.semiAnalyzedSemanticNode)
     {
@@ -450,7 +499,9 @@ private NodeResult inTreeOrderAnalyzeSemanticCallPass2(IReadonlyScope scope_, Se
     }
 
     return call.function_.inTreeOrderInterpretPass2(scope_, call/*, analyzeOptions*/);
+    +/
 }
+    +/
 
 /+
 
@@ -507,6 +558,10 @@ uint inTreeOrderAnalyzeExpressionPass1(IScope scope_, SemanticNode semanticNode)
         IScope scope_;
         uint errorCount;
         this(IScope scope_) { this.scope_ = scope_; }
+        void visit(SymbolTableEntry node)
+        {
+            assert(0, "not implemented");
+        }
         void visit(Tuple node)
         {
             // TODO: does the tuple have it's own scope?
@@ -516,10 +571,11 @@ uint inTreeOrderAnalyzeExpressionPass1(IScope scope_, SemanticNode semanticNode)
                 errorCount += inTreeOrderAnalyzeExpressionPass1(scope_, part);
             }
         }
+        void visit(SetReturnNode node) { assert(0, "not implemented"); }
         //void visit(Void node) { }
         void visit(Symbol node) { }
         void visit(RegularCall node) { errorCount = inTreeOrderAnalyzeRegularCallPass1(scope_, node); }
-        void visit(SemanticCall node) { errorCount = inTreeOrderAnalyzeSemanticCallPass1(scope_, node); }
+        void visit(SemanticCall node) { errorCount = node.inTreeOrderInterpretPass1(scope_); }
         void visit(BuiltinType node) { }
         void visit(SemanticFunction node) { }
         void visit(RegularFunction node) { }
@@ -532,9 +588,67 @@ uint inTreeOrderAnalyzeExpressionPass1(IScope scope_, SemanticNode semanticNode)
     return visitor.errorCount;
 }
 
+uint analyzeSymbolTableEntryPass2(SymbolTableEntry entry)
+{
+    if (entry.state == SymbolTableEntry.State.pass2Done)
+        return 0;
+    if (entry.state == SymbolTableEntry.State.failed)
+        return 1;
+    if (entry.state == SymbolTableEntry.State.pass2Started)
+        assert(0, "not sure what to do here");
+
+    static class Visitor : HighLevelVisitorNotImplementedByDefault
+    {
+        SymbolTableEntry entry;
+        uint errorCount;
+        this(SymbolTableEntry entry) { this.entry = entry; }
+        final override void visit(Symbol node)
+        {
+            /*
+            !!!
+            auto result = resolveQualified(scope_, node.value, &node.formatLocation);
+            if (result.errorCount > 0)
+            {
+                this.visitResult = OptionalNodeResult(result.errorCount);
+                return;
+            }
+            // TODO: maybe analyze it more?  Not sure how this node is being used though, so
+            //       we don't want to do too much
+            this.visitResult = OptionalNodeResult(result.value);
+            */
+            assert(0, "not impl");
+        }
+        final override void visit(RegularCall node) { }
+        final override void visit(Value node) { }
+        final override void visit(RegularFunction) { }
+        final override void visit(LazyNode node)
+        {
+            auto result = node.tryEvaluate();
+            if (result.errorCount > 0)
+            {
+                this.errorCount = result.errorCount;
+                return;
+            }
+            assert(result.value, "codebug");
+            entry.currentNode = result.value;
+        }
+    }
+    for (;;)
+    {
+        auto nodeBeforeAnalyzed = entry.currentNode;
+        scope visitor = new Visitor(entry);
+        //from!"std.stdio".writefln("[DEBUG] analyzeSymbolTableEntryPass2 %s", entry);
+        entry.currentNode.accept(visitor);
+        if (visitor.errorCount > 0)
+            return visitor.errorCount;
+        if (entry.currentNode == nodeBeforeAnalyzed)
+            return 0;
+    }
+}
+
+
 uint inTreeOrderAnalyzeExpressionPass2(IReadonlyScope scope_, SemanticNode* semanticNodeRef, AnalyzeOptions analyzeOptions)
 {
-    verbose(3, "analyzeExpression %s, analyzeOptions=%s", (*semanticNodeRef), analyzeOptions);
     static class Visitor : HighLevelVisitorNotImplementedByDefault
     {
         IReadonlyScope scope_;
@@ -542,6 +656,14 @@ uint inTreeOrderAnalyzeExpressionPass2(IReadonlyScope scope_, SemanticNode* sema
         OptionalNodeResult visitResult;
         this(IReadonlyScope scope_, AnalyzeOptions analyzeOptions)
         { this.scope_ = scope_; this.analyzeOptions = analyzeOptions; }
+        final override void visit(SymbolTableEntry node)
+        {
+            this.visitResult = OptionalNodeResult(analyzeSymbolTableEntryPass2(node));
+        }
+        final override void visit(SetReturnNode node)
+        {
+            //this.visitResult = OptionalNodeResult(analyzeSymbolTableEntryPass2(node.set.symbolTableEntry));
+        }
         //final override void visit(Void node) { }
         final override void visit(Symbol node)
         {
@@ -568,7 +690,8 @@ uint inTreeOrderAnalyzeExpressionPass2(IReadonlyScope scope_, SemanticNode* sema
         }
         final override void visit(SemanticCall node)
         {
-            visitResult = inTreeOrderAnalyzeSemanticCallPass2(scope_, node, analyzeOptions);
+            //visitResult = inTreeOrderAnalyzeSemanticCallPass2(scope_, node, analyzeOptions);
+            visitResult = node.inTreeOrderInterpretPass2(scope_);
             assert(visitResult.value || visitResult.errorCount > 0, "codebug, analyzeSemantic call must return a node or errors");
         }
         final override void visit(BuiltinType node) { }
@@ -579,8 +702,8 @@ uint inTreeOrderAnalyzeExpressionPass2(IReadonlyScope scope_, SemanticNode* sema
     }
     for (;;)
     {
+        verbose(3, "analyzeExpressionPass2 %s, analyzeOptions=%s", (*semanticNodeRef), analyzeOptions);
         scope visitor = new Visitor(scope_, analyzeOptions);
-        verbose(4, "analyzeExpression %s", (*semanticNodeRef));
         (*semanticNodeRef).accept(visitor);
         if (visitor.visitResult.errorCount > 0 || visitor.visitResult.value is null)
             return visitor.visitResult.errorCount;
@@ -595,6 +718,17 @@ uint enforceValidStatement(IReadonlyScope scope_, SemanticNode semanticNode)
         IReadonlyScope scope_;
         uint errorCount;
         this(IReadonlyScope scope_) { this.scope_ = scope_; }
+        final override void visit(SymbolTableEntry node)
+        {
+            /**
+            TODO: we want to error in this case, however, some functions like set(...)
+                  currently return a symbol table result which ARE valid statements.
+                  I may need to modify their return object to wrap the SymbolTableEntry
+                  with an object that is ignorable.
+            */
+            this.errorCount = errorfUint(node.formatLocation, "symbol table entries are currently not valid statements");
+        }
+        final override void visit(SetReturnNode node) { }
         //final override void visit(Symbol node) { /* probably ignore on pass 1*/ }
         final override void visit(RegularCall node)
         {
@@ -642,6 +776,10 @@ uint analyzeForMemberAccess(SemanticNode* semanticNodeRef)
         OptionalNodeResult visitResult;
         this(/*IReadonlyScope scope_, AnalyzeOptions analyzeOptions*/)
         { /*this.scope_ = scope_; this.analyzeOptions = analyzeOptions;*/ }
+        final override void visit(SymbolTableEntry node)
+        {
+            visitResult.errorCount = analyzeForMemberAccess(&node.currentNode);
+        }
         /*
         final override void visit(Symbol node)
         {
@@ -686,6 +824,15 @@ RegularFunction resolveForRegularFunctionCall(IReadonlyScope scope_, SemanticNod
         RegularFunction funcResult;
         this(IReadonlyScope scope_)
         { this.scope_ = scope_; }
+        final override void visit(SymbolTableEntry node)
+        {
+            auto result = resolveForRegularFunctionCall(scope_, node.currentNode);
+            if (result)
+            {
+                node.currentNode = result; // update the symbol table entry as well
+                this.funcResult = result;
+            }
+        }
         /*
         final override void visit(Symbol node)
         {
@@ -702,7 +849,8 @@ RegularFunction resolveForRegularFunctionCall(IReadonlyScope scope_, SemanticNod
         */
         final override void visit(SemanticCall node)
         {
-            errorf(node.formatLocation, "semantic call not impl: %s", node.function_.nameForMessages);
+            //errorf(node.formatLocation, "semantic call not impl: %s", node.getFunctionName);
+            this.funcResult = node.interpretToRegularFunction(node.formatLocation).value;
         }
         //final override void visit(BuiltinType node) { }
         final override void visit(RegularFunction node)
@@ -718,7 +866,35 @@ RegularFunction resolveForRegularFunctionCall(IReadonlyScope scope_, SemanticNod
     return visitor.funcResult;
 }
 
-ResultOrError!Symbol tryAnalyzeToSymbolPass1(SemanticNode node)
+
+
+OptionalResultOrError!Symbol trySemanticCallToSymbol(SemanticCall call)
+{
+    // only builtin functions that are available in pass 1 may be used here
+    // for now, the only function that support this is the symbol function
+    {
+        auto symbolCall = cast(symbolCall)call;
+        if (symbolCall)
+        {
+            return symbolCall.inTreeOrderInterpretPass2();
+        }
+    }
+    return OptionalResultOrError!Symbol(null);
+}
+
+OptionalResultOrError!Symbol tryAnalyzeToSymbolPass1(const(SyntaxNode)* node)
+{
+    if (node.type == SyntaxNodeType.symbol || node.type == SyntaxNodeType.keyword)
+        return OptionalResultOrError!Symbol(new SymbolFromSyntax(node));
+    if (node.type == SyntaxNodeType.call)
+    {
+        auto call = tryGetSemanticFunctionFor(&node.call);
+        if (call !is null)
+            return trySemanticCallToSymbol(call);
+    }
+    return OptionalResultOrError!Symbol(null);
+}
+OptionalResultOrError!Symbol tryAnalyzeToSymbolPass1(SemanticNode node)
 {
     static class Visitor : HighLevelVisitorIgnoreByDefault
     {
@@ -726,19 +902,7 @@ ResultOrError!Symbol tryAnalyzeToSymbolPass1(SemanticNode node)
         final override void visit(Symbol node) { this.visitResult = ResultOrError!Symbol(node); }
         final override void visit(SemanticCall node)
         {
-            // only builtin functions that are available in pass 1 may be used here
-            // for now, the only function that support this is the symbol function
-            if (node.function_ is symbolFunction.instance)
-            {
-                auto result = symbolFunction.interpretPass2(node);
-                if (result.value)
-                    this.visitResult = OptionalResultOrError!Symbol(result.value);
-                else
-                {
-                    assert(result.errorCount > 0, "codebug");
-                    this.visitResult = OptionalResultOrError!Symbol(result.errorCount);
-                }
-            }
+            this.visitResult = trySemanticCallToSymbol(node);
         }
     }
     scope visitor = new Visitor();
@@ -748,4 +912,22 @@ ResultOrError!Symbol tryAnalyzeToSymbolPass1(SemanticNode node)
     if (visitor.visitResult.errorCount == 0)
         return ResultOrError!Symbol(1);
     return ResultOrError!Symbol(visitor.visitResult.errorCount);
+}
+
+// Returns: null on error
+IType analyzeToType(IReadonlyScope scope_, SemanticNode node)
+{
+    static class Visitor : HighLevelVisitorNotImplementedByDefault
+    {
+        IReadonlyScope scope_;
+        IType returnType;
+        this(IReadonlyScope scope_) { this.scope_ = scope_; }
+        final override void visit(Value node)
+        {
+            this.returnType = node.tryAsType();
+        }
+    }
+    scope visitor = new Visitor(scope_);
+    node.accept(visitor);
+    return visitor.returnType;
 }

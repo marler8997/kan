@@ -2,4 +2,4 @@ import(io)
 set(symbol(true) "Using string through keyword symbol")
 
 io.print(symbol(true))
-//io.print(true)
+io.print(true)
