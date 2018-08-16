@@ -200,6 +200,26 @@ class AnySingleThing : IType
     +/
 }
 
+class PtrType : BuiltinType
+{
+    IType derefType;
+    this(IType derefType)
+    {
+        this.derefType = derefType;
+    }
+    //
+    // IType methods
+    //
+    final override bool supports(SemanticNode node)
+    {
+        assert(0, "not implemented");
+    }
+    final override void formatter(StringSink sink) const
+    {
+        formattedWrite(sink, "ptr(%s)", derefType.formatName);
+    }
+}
+
 class VoidPtrType : BuiltinType
 {
     mixin singleton;

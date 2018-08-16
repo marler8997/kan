@@ -13,7 +13,7 @@ requireDll("kernel32.dll" {
 
 set(GetStdHandle function(windows.HANDLE {
     u32 stdHandle
-}))
+} extern("GetStdHandle")))
 
 // TODO: make a wrapper around WriteFile
 //       it should be defined in the same set call and translate
@@ -22,12 +22,12 @@ set(GetStdHandle function(windows.HANDLE {
 // TODO: return type should have the storage length of c.int, but it should
 //       be wrapped by a type BOOL that contains methods like "value.pass" or "value.fail"
 set(WriteFile function(stdc.int {
-    HANDLE file
-    const(ubyte) data
+    windows.HANDLE file
+    ptr(u8) data
     u32 length
     ptr(u32) lengthWritten
     ptr(void) overlapped
-}))
+} extern("WriteFile")))
 
 
 

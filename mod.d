@@ -28,6 +28,8 @@ import symtab : SymbolTable;
 import universal : UniversalScope;
 import interpreter : Interpreter;
 import analyzer : AnalyzeOptions;
+import pass1 = analyzer.pass1;
+import pass2 = analyzer.pass2;
 static import analyzer;
 
 class Module : IScope
@@ -55,12 +57,20 @@ class Module : IScope
 
     SymbolTable symbolTable;
 
-    static immutable builtin = new immutable Module();
+    __gshared immutable string builtinSyntaxSource = "";
+    private __gshared immutable SyntaxNode builtinSyntaxNode = SyntaxNode.makeString(builtinSyntaxSource, builtinSyntaxSource);
+    static const(SyntaxNode)* getBuiltinSyntaxNode()
+    {
+        return &builtinSyntaxNode;
+    }
+    __gshared static immutable builtin = new immutable Module();
     private this() immutable
     {
         this.filename = "<builtin>";
         this.isEntryModule = No.isEntryModule;
+        this.content = builtinSyntaxSource;
     }
+
     private this(string filename, Flag!"isEntryModule" isEntryModule, string importName)
     {
         this.filename = filename;
@@ -114,7 +124,7 @@ class Module : IScope
         uint errorCount = 0;
         foreach (node; semanticNodes)
         {
-            errorCount += analyzer.inTreeOrderAnalyzeExpressionPass1(this, node);
+            errorCount += pass1.inTreeOrderAnalyzeExpression(this, node);
         }
         assert(state == State.pass1Started, "codebug");
         state = State.pass1Done;
@@ -146,17 +156,13 @@ class Module : IScope
         verbose(0, "analyzePass2 '%s'", filename);
 
         {
-            uint totalErrorCount = 0;
+            uint errorCount = 0;
             foreach (i; 0 .. semanticNodes.length)
             {
-                const errorCount = analyzer.inTreeOrderAnalyzeExpressionPass2(this, &semanticNodes[i], AnalyzeOptions.none);
-                if (errorCount == 0)
-                    totalErrorCount += analyzer.enforceValidStatement(this, semanticNodes[i]);
-                else
-                    totalErrorCount += errorCount;
+                errorCount += pass2.analyzeStatement(this, &semanticNodes[i]);
             }
-            if (totalErrorCount > 0)
-                return totalErrorCount;
+            if (errorCount > 0)
+                return errorCount;
         }
 
         assert(state == State.pass2Started, "codebug");

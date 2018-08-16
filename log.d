@@ -4,7 +4,7 @@ import more.format : StringSink;
 
 static import global;
 import common : passfail;
-import semantics : ResultOrError;
+import semantics : ResultOrError, OptionalResultOrError;
 
 struct LocationFormatter
 {
@@ -88,6 +88,11 @@ auto errorfNodeResult(Location, Args...)(Location location, string format, Args 
 {
     import semantics : SemanticNode;
     return errorfResultOrError!(SemanticNode, Location, Args)(location, format, args);
+}
+auto errorfOptionalNodeResult(Location, Args...)(Location location, string format, Args args)
+{
+    import semantics : SemanticNode;
+    return errorfOptionalResultOrError!(SemanticNode, Location, Args)(location, format, args);
 }
 auto errorfSymbolResult(Location, Args...)(Location location, string format, Args args)
 {

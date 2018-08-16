@@ -22,7 +22,7 @@ import symtab : SymbolTable;
 import mod : Module;
 static import builtin;
 import builtin : tryGetSemanticFunctionFor;
-import analyzer : analyzeUserDefinedFunctionPass2;
+import pass2 = analyzer.pass2;
 static import interpreter;
 
 // !!!!!!
@@ -131,6 +131,10 @@ SemanticNode newSemanticNode(const(SyntaxNode)* syntaxNode)
 
 Module tryGetModuleFromSource(immutable(char)* source)
 {
+    if (source == Module.builtinSyntaxSource.ptr)
+    {
+        return Module.builtin.unconst;
+    }
     foreach (mod; global.modules.data)
     {
         if (source >= mod.content.ptr && source < mod.content.ptr + mod.content.length)
@@ -722,8 +726,8 @@ class BuiltinType : SemanticNode, IType
     //
     // SemanticNode methods
     //
-    final override const(SyntaxNode)* getSyntaxNode() const { assert(0, "not implemented"); }
-    final override IType getType() const { assert(0, "not implemented"); }
+    final override const(SyntaxNode)* getSyntaxNode() const { return Module.getBuiltinSyntaxNode; }
+    final override IType getType() const { return TypeType.instance.unconst; }
     final override void valueFormatter(StringSink sink) const { sink("<type>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
     {
@@ -1062,6 +1066,40 @@ SymbolTableEntry tryAddOrPrintError(IScope scope_, string symbol, SemanticNode n
     return result;
 }
 
+/**
+Used to pass IReadonlyScope to IScope
+Use: scope thunkedScope = new ReadonlyScopeThunk(scope_);
+*/
+class ReadonlyScopeThunk : IScope
+{
+    IReadonlyScope wrappedScope;
+    this(IReadonlyScope wrappedScope) { this.wrappedScope = wrappedScope; }
+    //
+    // IScope methods
+    //
+    SymbolTableEntry tryAdd(string symbol, SemanticNode node)
+    {
+        errorf(node.formatLocation, "this scope has already been analyzed on pass1, no more symbols can be added");
+        return null;
+    }
+    //
+    // IReadonlyScope methods
+    //
+    void dumpSymbols() const { wrappedScope.dumpSymbols(); }
+    @property inout(IReadonlyScope) getParent() inout { return wrappedScope.getParent(); }
+    @property inout(Module) asModule() inout { return wrappedScope.asModule(); }
+    @property inout(IScope) asWriteable() inout { return wrappedScope.asWriteable(); }
+    @property inout(JumpBlock) asJumpBlock() inout { return wrappedScope.asJumpBlock(); }
+    uint prepareForChildAnalyzePass2() { return wrappedScope.prepareForChildAnalyzePass2(); }
+    //
+    // IDotQualifiable methods
+    //
+    OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside)
+    { return wrappedScope.tryGetUnqualified(symbol, fromInside); }
+    void scopeDescriptionFormatter(StringSink sink) const
+    { return wrappedScope.scopeDescriptionFormatter(sink); }
+}
+
 struct Parameter
 {
     string name;
@@ -1323,6 +1361,37 @@ class BuiltinRegularFunction : RegularFunction
     }
 }
 
+class ExternProperties : Value
+{
+    const(SyntaxNode)* syntaxNode;
+    string funcName;
+    this(const(SyntaxNode)* syntaxNode, string funcName)
+    {
+        this.syntaxNode = syntaxNode;
+        this.funcName = funcName;
+    }
+    //
+    // Value methods
+    //
+    final override IType tryAsType() const { return null; }
+    //
+    // IDotQualifiable methods
+    //
+    final OptionalNodeResult tryGetUnqualified(string symbol, Flag!"fromInside" fromInside) { assert(0, "not implemented"); }
+    void scopeDescriptionFormatter(StringSink sink) const { formattedWrite(sink, "extern(\"%s\")", funcName); }
+    //
+    // SemanticNode methods
+    //
+    protected final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
+    final override IType getType() const { assert(0, "not implemented"); }
+    final override void valueFormatter(StringSink sink) const { formattedWrite(sink, "extern(\"%s\")", funcName); }
+    final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const
+    {
+        formattedWrite(sink, "extern(\"%s\")", funcName);
+    }
+
+}
+
 class UserDefinedFunction : RegularFunction, IScope
 {
     const(SyntaxNode)* originalDefinitionNode;
@@ -1338,8 +1407,20 @@ class UserDefinedFunction : RegularFunction, IScope
     State state;
     IType returnType;
     uarray!FunctionParameter params;
-    uarray!SemanticNode bodyNodes;
-    SymbolTable bodySymbolTable;
+    Flag!"isExternFunction" isExternFunction;
+    union
+    {
+        struct
+        {
+            // TODO: abi
+            string externName;
+        }
+        struct
+        {
+            uarray!SemanticNode bodyNodes;
+            SymbolTable bodySymbolTable;
+        }
+    }
 
     this(IReadonlyScope containingScope, const(SyntaxNode)* originalDefinitionNode, uarray!SyntaxNode defNodes)
     {
@@ -1356,7 +1437,7 @@ class UserDefinedFunction : RegularFunction, IScope
         if (state == State.initial)
         {
             state = State.pass2Started;
-            uint errorCount = analyzeUserDefinedFunctionPass2(this);
+            uint errorCount = pass2.analyzeUserDefinedFunction(this);
             assert(state == State.pass2Started, "codebug");
             state = (errorCount > 0) ? State.analyzeFailed : State.pass2Done;
         }

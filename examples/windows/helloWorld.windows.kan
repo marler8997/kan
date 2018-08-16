@@ -2,9 +2,19 @@ import(windows)
 import(windows.kernel32)
 
 //dumpSymbolTable()
-
+import(io)
+io.print("[DEBUG] A")
 set(stdout kernel32.GetStdHandle(windows.STD_OUTPUT_HANDLE))
+io.print("[DEBUG] B")
+//io.print("[DEBUG] stdout=" stdout)
+io.print("[DEBUG] C")
 set(bytesWritten alloca(u32))
-kernel32.WriteFile(stdout "HelloWorld" length("HelloWorld") ptrTo(bytesWritten) 0)
+
+set(msg "Hello World")
+
+io.print("[DEBUG] D")
+kernel32.WriteFile(stdout msg length(msg) ptrTo(bytesWritten) 0)
+io.print("[DEBUG] E")
 
 // TODO: make sure that byteWritten is correct
+//assert(equals(deref(bytesWritten) length(msg)))

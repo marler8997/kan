@@ -18,6 +18,8 @@ set(testSetNumberVar function(void {} {
     set(a 0)
     set(b a)
     io.print("b is " b)
+    assert(equals(b 0))
+    assert(equals(b a))
 }))
 testSetNumberVar()
 

@@ -14,8 +14,9 @@ import semantics;
 import types;// : VoidType, Anything, NumberType, SymbolType, Multi, StringType, PrintableType;
 import symtab : SymbolTable;
 import mod : sliceModuleBaseName, loadImport, Module;
-import analyzer/* : AnalyzeOptions, analyzeSemanticCallPass1,
-                  analyzeExpressionPass1, analyzeExpressionPass2, tryAnalyzeToSymbolPass1*/;
+import analyzer : tryAnalyzeToSymbol;
+import pass1 = analyzer.pass1;
+import pass2 = analyzer.pass2;
 import interpreter : Interpreter;
 static import interpreter;
 
@@ -47,7 +48,7 @@ Symbol tryArgAsSymbolPass1(IReadonlyScope scope_, SemanticCall call, uint argInd
    in { assert(argIndex < call.arguments.length, "code bug"); } do
 {
     auto arg = call.arguments[argIndex];
-    auto result = tryAnalyzeToSymbolPass1(arg);
+    auto result = pass1.tryAnalyzeToSymbol(arg);
     return result.value ? result.value :
         errorfNullable!Symbol(arg.formatLocation(), "the '%s' function requires as symbol for the argument at index %s but got '%s'",
             call.syntaxNode.functionName, argIndex, arg);
@@ -85,7 +86,9 @@ SemanticCall tryGetSemanticFunctionFor(const(SyntaxNode)* syntaxNode, string fun
         "set",
         "setBuiltinFunction",
         "function",
-        "call"
+        "call",
+        "ptr",
+        "extern"
         //"jumpBlock",
         //"jumpLoopIf",
         //"foreach",
@@ -146,7 +149,7 @@ private class symbolCall : BuiltinSemanticCall
     {
         if (checkSyntaxArgCount(this, 1).failed)
             return ResultOrError!Symbol(1);
-        auto result = tryAnalyzeToSymbolPass1(&syntaxArgs[0]);
+        auto result = tryAnalyzeToSymbol(&syntaxArgs[0]);
         if (result.errorCount > 0)
             return ResultOrError!Symbol(result.errorCount);
         if (!result.value)
@@ -221,7 +224,7 @@ private class importCall : BuiltinSemanticCall
         foreach (i; 0 .. syntaxArgs.length)
         {
             auto syntaxArg = &syntaxArgs[i];
-            auto symbolResult = tryAnalyzeToSymbolPass1(syntaxArg);
+            auto symbolResult = tryAnalyzeToSymbol(syntaxArg);
             if (symbolResult.errorCount > 0)
                 return symbolResult.errorCount;
             if (!symbolResult.value)
@@ -283,7 +286,7 @@ class setCall : BuiltinSemanticCall
             return 1;
 
         auto symbolSyntaxNode = &syntaxArgs[0];
-        auto symbolResult = tryAnalyzeToSymbolPass1(symbolSyntaxNode);
+        auto symbolResult = tryAnalyzeToSymbol(symbolSyntaxNode);
         if (symbolResult.errorCount > 0)
             return symbolResult.errorCount;
         if (!symbolResult.value)
@@ -291,7 +294,7 @@ class setCall : BuiltinSemanticCall
 
         auto rhsNode = newSemanticNode(&syntaxArgs[1]);
         {
-            auto errorCount = inTreeOrderAnalyzeExpressionPass1(scope_, rhsNode);
+            auto errorCount = pass1.inTreeOrderAnalyzeExpression(scope_, rhsNode);
             if (errorCount > 0)
                 return errorCount;
         }
@@ -322,7 +325,7 @@ private class setBuiltinFunctionCall : BuiltinSemanticCall
             return 1;
 
         auto symbolSyntaxNode = &syntaxArgs[0];
-        auto symbolResult = tryAnalyzeToSymbolPass1(symbolSyntaxNode);
+        auto symbolResult = tryAnalyzeToSymbol(symbolSyntaxNode);
         if (symbolResult.errorCount > 0)
             return symbolResult.errorCount;
         if (!symbolResult.value)
@@ -404,7 +407,7 @@ private class callCall : BuiltinSemanticCall
         uint errorCount = 0;
         foreach (semanticNode; semanticNodes)
         {
-            errorCount += inTreeOrderAnalyzeExpressionPass1(scope_, semanticNode);
+            errorCount += pass1.inTreeOrderAnalyzeExpression(scope_, semanticNode);
         }
         return errorCount;
 
@@ -415,7 +418,7 @@ private class callCall : BuiltinSemanticCall
             if (errorCount > 0)
                 return errorCount;
         }
-        auto funcSymbol = tryAnalyzeToSymbolPass1(&syntaxArgs[0]);
+        auto funcSymbol = pass1.tryAnalyzeToSymbol(&syntaxArgs[0]);
         auto loweredSyntaxArgs = syntaxArgs[1 .. $];
         if (funcSymbol)
         {
@@ -516,6 +519,51 @@ private class functionCall : BuiltinSemanticCall
         return OptionalResultOrError!RegularFunction(makeFunction);
     }
 }
+
+private class ptrCall : BuiltinSemanticCall
+{
+    SemanticNode argNode;
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
+    {
+        super(syntaxNode, functionName, syntaxArgs);
+    }
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
+    {
+        if (checkSyntaxArgCount(this, 1).failed)
+            return 1;
+        this.argNode = newSemanticNode(&syntaxArgs[0]);
+        return pass1.inTreeOrderAnalyzeExpression(scope_, this.argNode);
+    }
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
+    {
+        auto type = pass2.analyzeToType(scope_, this.argNode.unconst);
+        if (type is null)
+            return errorfNodeResult(formatLocation, "the ptr semantic function requires a type but got '%s'", this.argNode);
+        return NodeResult(new PtrType(type));
+    }
+}
+
+private class externCall : BuiltinSemanticCall
+{
+    private this(const(SyntaxNode)* syntaxNode, string functionName, uarray!SyntaxNode syntaxArgs)
+    {
+        super(syntaxNode, functionName, syntaxArgs);
+    }
+    final override uint inTreeOrderInterpretPass1(IScope scope_)
+    {
+        if (checkSyntaxArgCount(this, 1).failed)
+            return 1;
+        auto arg = &syntaxArgs[0];
+        if (arg.type != SyntaxNodeType.string_)
+            return errorfUint(formatLocation, "the 'extern' function expects a string but got %s", arg.type);
+        return 0;
+    }
+    final override NodeResult inTreeOrderInterpretPass2(IReadonlyScope scope_) const
+    {
+        return NodeResult(new ExternProperties(getSyntaxNode, syntaxArgs[0].str.str));
+    }
+}
+
 
 class jumpBlockFunction : SemanticFunction
 {

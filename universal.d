@@ -14,6 +14,7 @@ struct BuiltinSymbol
     static import builtin;
     import types;
     __gshared static immutable values = [
+        immutable BuiltinSymbol("u8", UnsignedFixedWidthType!8.instance),
         immutable BuiltinSymbol("u32", UnsignedFixedWidthType!32.instance),
         immutable BuiltinSymbol("assert", builtin.assertFunction.instance),
         immutable BuiltinSymbol("equals", builtin.equalsFunction.instance),

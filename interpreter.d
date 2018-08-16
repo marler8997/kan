@@ -133,8 +133,13 @@ struct Interpreter
                     userDefined.returnType));
             }
 
-            //blockStack.put(CodeBlockPosition(userDefined.bodyNodes, 0, runtimeArgs.toUarray));
-            return interpretFunctionOrModule(returnType, runtimeArgs.toUarray, userDefined.bodyNodes);
+            if (!userDefined.isExternFunction)
+                return interpretFunctionOrModule(returnType, runtimeArgs.toUarray, userDefined.bodyNodes);
+
+            auto result = from!"funcload".loadExternFunc(userDefined);
+            // TODO: I have a function pointer, now how do I call it?
+            //       I think I'll need libffi
+            assert(0, "I have the function pointer...now how do I call it?");
         }
     }
 }
