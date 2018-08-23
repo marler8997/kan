@@ -165,6 +165,17 @@ mixin template singleton(Flag!"ctor" ctor = Yes.ctor)
 class QuitException : Throwable { this() { super(null); }}
 @property auto quit() { return new QuitException(); }
 
+bool skipOver(T)(T* haystack, const(char)[] needle)
+{
+    import std.string : startsWith;
+    if ( (*haystack).startsWith(needle) )
+    {
+        *haystack = (*haystack)[needle.length .. $];
+        return true;
+    }
+    return false;
+}
+
 version(Windows)
 {
     auto DirSeparatorChar = '\\';

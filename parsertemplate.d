@@ -7,7 +7,7 @@ import more.utf8;
 import more.format;
 
 import common : toUarray;
-import syntax : SyntaxNode, KeywordType;
+import syntax : SyntaxNode, KeywordType, NumberType;
 
 // TODO:
 // Maybe support a special character that allows you to use keywords as symbols
@@ -289,18 +289,35 @@ struct ParserTemplate(Policy)
     {
         auto start = nextPtr;
         auto ptr = start;
-        for (;;)
+        NumberType type;
+        if (ptr[0] == '0' && ptr[1] == 'x')
         {
-            ptr++;
-            auto nextChar = ptr[0];
-            if (nextChar > '9' || nextChar < '0')
+            type = NumberType.hex;
+            ptr += 2;
+            for (;; ptr++)
             {
-                break;
+                auto nextChar = ptr[0];
+                if (nextChar < '0' ||
+                    (nextChar > '9' && nextChar < 'A') ||
+                    (nextChar > 'F' && nextChar < 'a') ||
+                    nextChar > 'f')
+                    break;
+            }
+        }
+        else
+        {
+            type = NumberType.decimal;
+            for (;;)
+            {
+                ptr++;
+                auto nextChar = ptr[0];
+                if (nextChar < '0' || nextChar > '9')
+                    break;
             }
         }
         nextPtr = ptr;
         auto source = start[0 .. ptr - start];
-        return SyntaxNode.makeNumber(source);
+        return SyntaxNode.makeNumber(source, type);
     }
 }
 
@@ -467,6 +484,7 @@ unittest
 
     test("0", [num("0")]);
     test("1234", [num("1234")]);
+    test("0x1234", [num("0x1234")]);
 
     test("//", []);
     testError("/", `expected a symbol to start a statement but got "/"`);

@@ -39,6 +39,19 @@ struct KeywordSyntaxNode
     auto base() inout { return cast(SyntaxNode*)&this; }
 }
 
+enum NumberType
+{
+    decimal,
+    hex,
+}
+struct NumberSyntaxNode
+{
+    string source;
+    NumberType numberType;
+    auto base() inout { return cast(SyntaxNode*)&this; }
+}
+
+
 enum SyntaxNodeType
 {
     number,
@@ -51,6 +64,7 @@ enum SyntaxNodeType
     tuple,
     call,
 }
+
 struct SyntaxNode
 {
     union
@@ -60,12 +74,14 @@ struct SyntaxNode
         TupleSyntaxNode tuple = void;
         StringSyntaxNode str = void;
         KeywordSyntaxNode keyword = void;
+        NumberSyntaxNode number = void;
     }
 
     static assert(SyntaxNode.source.offsetof == CallSyntaxNode.source.offsetof);
     static assert(SyntaxNode.source.offsetof == TupleSyntaxNode.source.offsetof);
     static assert(SyntaxNode.source.offsetof == StringSyntaxNode.source.offsetof);
     static assert(SyntaxNode.source.offsetof == KeywordSyntaxNode.source.offsetof);
+    static assert(SyntaxNode.source.offsetof == NumberSyntaxNode.source.offsetof);
 
     SyntaxNodeType type;
     @disable this();
@@ -95,10 +111,15 @@ struct SyntaxNode
         this.call = CallSyntaxNode(source, functionName, arguments);
         this.type = SyntaxNodeType.call;
     }
-
-    pragma(inline) static SyntaxNode makeNumber(string source)
+    this(string source, NumberType numberType)
     {
-        return SyntaxNode(SyntaxNodeType.number, source);
+        this.number = NumberSyntaxNode(source, numberType);
+        this.type = SyntaxNodeType.number;
+    }
+
+    pragma(inline) static SyntaxNode makeNumber(string source, NumberType numberType)
+    {
+        return SyntaxNode(source, numberType);
     }
     pragma(inline) static SyntaxNode makeKeyword(string source, KeywordType keywordType)
     {

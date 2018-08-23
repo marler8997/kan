@@ -48,6 +48,12 @@ private void verboseFunction(Args...)(ubyte level, string format, Args args)
     writefln(format, args);
 }
 
+void errorfNoLocation(Args...)(string format, Args args)
+{
+    import std.stdio : writef, writefln;
+    writef("Error: ");
+    writefln(format, args);
+}
 void errorf(Location, Args...)(Location location, string format, Args args)
 {
     import std.stdio : writef, writefln;

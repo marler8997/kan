@@ -491,7 +491,7 @@ uint analyzeUserDefinedFunction(UserDefinedFunction func)
             if (tupleIndex >= paramTuple.nodes.length)
                 break;
 
-            SemanticNode type;
+            IType type;
             for (;;)
             {
                 auto node = paramTupleSemanticNodes[tupleIndex++];
@@ -503,8 +503,9 @@ uint analyzeUserDefinedFunction(UserDefinedFunction func)
                 // TODO: check if it is some type of modifier
                 if (type is null)
                 {
-                    // TODO: check that it is actually a type
-                    type = node;
+                    type = analyzeToType(func.containingScope, node);
+                    if (type is null)
+                        return 1;
                     break;
                 }
             }

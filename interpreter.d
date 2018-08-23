@@ -13,6 +13,7 @@ import semantics/* : IHighLevelVisitor, IScope, SemanticNodeType, SemanticNode, 
                    BuiltinRegularFunction, UserDefinedFunction,
                    BlockFlags*/;
 import types : IType, VoidType;
+import funcload : loadExternFunc, callExternFunc;
 
 struct RuntimeBlock
 {
@@ -136,10 +137,28 @@ struct Interpreter
             if (!userDefined.isExternFunction)
                 return interpretFunctionOrModule(returnType, runtimeArgs.toUarray, userDefined.bodyNodes);
 
-            auto result = from!"funcload".loadExternFunc(userDefined);
-            // TODO: I have a function pointer, now how do I call it?
-            //       I think I'll need libffi
-            assert(0, "I have the function pointer...now how do I call it?");
+            auto result = loadExternFunc(userDefined);
+            callExternFunc(&this, result, userDefined.getSyntaxNode, userDefined.returnType, userDefined.params, runtimeArgs.toUarray);
+            from!"std.stdio".writefln("[DEBUG] return value from callExternFunc not implemented");
+            return new VoidValue(call.getSyntaxNode);
         }
+    }
+
+    void serialize(SemanticNode node, IType type, ubyte[] storage)
+    {
+        verbose(3, "serialize '%s'", node);
+        static class Visitor : HighLevelVisitorNotImplementedByDefault
+        {
+            Interpreter* interpreter;
+            IType type;
+            ubyte[] storage;
+            this(Interpreter* interpreter, IType type, ubyte[] storage) { this.interpreter=interpreter;this.type=type;this.storage=storage; }
+            final override void visit(Value node)
+            {
+                node.serialize(type, storage);
+            }
+        }
+        scope visitor = new Visitor(&this, type, storage);
+        node.accept(visitor);
     }
 }

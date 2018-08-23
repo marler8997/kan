@@ -237,6 +237,7 @@ class VoidKeyword : Value
     // Value methods
     //
     final override IType tryAsType() const { return VoidType.instance.unconst; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -264,6 +265,7 @@ class VoidValue : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -556,6 +558,7 @@ class Value : SemanticNode
 {
     /** Try to interpret the node as a type */
     abstract IType tryAsType() const;
+    abstract void serialize(IType type, ubyte[] storage) const;
     //
     // SemanticNode methods
     //
@@ -575,6 +578,7 @@ class Bool : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -612,6 +616,24 @@ class NumberLiteral : Number
         this.syntaxNode = syntaxNode;
     }
     //
+    // Value methods
+    //
+    final override void serialize(IType type, ubyte[] storage) const
+    {
+        import serial : trySerializeNumber;
+        auto numberType = cast(NumberType)type;
+        if (!numberType)
+        {
+            assert(0, from!"std.format".format("not sure if a number literal can be passed to type '%s'", type));
+        }
+        auto error = trySerializeNumber(syntaxNode.source, storage);
+        if (error)
+        {
+            errorfNoLocation("failed to serialize number '%s' to %s bytes: %s", syntaxNode.source, storage.length, error);
+            assert(0);
+        }
+    }
+    //
     // SemanticNode methods
     //
     final override const(SyntaxNode)* getSyntaxNode() const { return syntaxNode; }
@@ -633,6 +655,7 @@ class StringLiteral : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -662,6 +685,7 @@ class FlagValue : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -693,6 +717,7 @@ class EnumValue : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -741,8 +766,8 @@ class FunctionParameter : Value
     RegularFunction func;
     uint paramIndex;
     string name;
-    SemanticNode type;
-    this(const(SyntaxNode)* syntaxNode, RegularFunction func, uint paramIndex, string name, SemanticNode type)
+    IType type;
+    this(const(SyntaxNode)* syntaxNode, RegularFunction func, uint paramIndex, string name, IType type)
     {
         this.syntaxNode = syntaxNode;
         this.func = func;
@@ -758,6 +783,7 @@ class FunctionParameter : Value
         // Maybe a function parameter could be an alias to a type?
         assert(0, "not implemented");
     }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -822,6 +848,7 @@ class ImportedModule : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -1374,6 +1401,7 @@ class ExternProperties : Value
     // Value methods
     //
     final override IType tryAsType() const { return null; }
+    final override void serialize(IType type, ubyte[] storage) const { assert(0, "not impl"); }
     //
     // IDotQualifiable methods
     //
@@ -1480,7 +1508,7 @@ class UserDefinedFunction : RegularFunction, IScope
     //
     // SemanticNode methods
     //
-    protected final override const(SyntaxNode)* getSyntaxNode() const { return originalDefinitionNode; }
+    final override const(SyntaxNode)* getSyntaxNode() const { return originalDefinitionNode; }
     final override IType getType() const { assert(0, "not implemented"); }
     final override void valueFormatter(StringSink sink) const { sink("<function>"); }
     final override void printFormatter(StringSink sink, interpreter.Interpreter* interpreter) const

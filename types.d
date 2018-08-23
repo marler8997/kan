@@ -76,6 +76,12 @@ interface IType
     // error messages and such
     void formatter(StringSink sink) const;
 }
+
+interface IFixedStorageSizeType
+{
+    uint getStorageSize() const;
+}
+
 @property DelegateFormatter formatName(const(IType) type)
 {
     return DelegateFormatter(&type.formatter);
@@ -761,10 +767,14 @@ class UnsignedType : IntegerType
     override void formatter(StringSink sink) const { sink("unsigned"); }
 }
 
-class UnsignedFixedWidthType(ushort bitWidth) : UnsignedType
+class UnsignedFixedWidthType(ushort bitWidth) : UnsignedType, IFixedStorageSizeType
 {
     mixin singleton;
     override void formatter(StringSink sink) const { formattedWrite(sink, "u%s", bitWidth); }
+    //
+    // IFixedStorageSizeType methods
+    //
+    final uint getStorageSize() const { assert(bitWidth % 8 == 0, "not implemented"); return bitWidth / 8; }
 }
 
 

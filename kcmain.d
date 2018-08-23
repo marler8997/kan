@@ -12,10 +12,11 @@ import more.file : readFile;
 
 static import global;
 
-import common : QuitException, formatDir;
+import common : QuitException, skipOver, formatDir;
 import log;
 import parser;
 import mod : Module, loadModuleFromFilename;
+static import ffi;
 
 void usage()
 {
@@ -42,24 +43,24 @@ int tryMain(string[] args)
             {
                 args[newArgsLength++] = arg;
             }
-            else if (arg.startsWith("-I"))
+            else if (skipOver(&arg, "-I="))
             {
-                // TODO: support -I<path>, -I=<path> and -I <path>
-                auto path = arg[2..$];
-                if (path[0] == '=')
-                    path = path[1..$];
-                if (global.importPaths.data.canFind(path))
+                if (global.importPaths.data.canFind(arg))
                 {
-                    writefln("Error: import path %s has been given more than once", path.formatDir);
+                    writefln("Error: import path %s has been given more than once", arg.formatDir);
                     return 1;
                 }
                 // TODO: should we check if this path exists?
-                if (!exists(path))
+                if (!exists(arg))
                 {
-                    writefln("Error: import path %s does not exist", path.formatDir);
+                    writefln("Error: import path %s does not exist", arg.formatDir);
                     return 1;
                 }
-                global.importPaths.put(path);
+                global.importPaths.put(arg);
+            }
+            else if (skipOver(&arg, "--ffi="))
+            {
+                ffi.setFilename(buildPath(arg, "i686-pc-mingw32", "libffi-6.dll"));
             }
             else if (arg == "-v" || arg == "-verbose")
             {
